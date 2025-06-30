@@ -1,28 +1,31 @@
-// File: cashier-app/services/cart_service.go
 package services
 
 import (
 	"context"
-	"errors"
+	stdErrors "errors"
 	"fmt"
-	"strconv"
+	"log"
 
 	"github.com/RehanAthallahAzhar/shopeezy-inventory-cart/helpers"
 	"github.com/RehanAthallahAzhar/shopeezy-inventory-cart/models"
+	"github.com/RehanAthallahAzhar/shopeezy-inventory-cart/pkg/errors"
 	"github.com/RehanAthallahAzhar/shopeezy-inventory-cart/repositories"
 )
 
-// CartService mendefinisikan interface untuk logika bisnis keranjang.
 type CartService interface {
-	FindAllCarts(ctx context.Context, userID string) ([]models.CartResponse, error)
-	AddCart(ctx context.Context, userID, productID string, quantity int, description string) (*models.Cart, error)
-	DeleteCart(ctx context.Context, cartID, productID string) error
-	UpdateCart(ctx context.Context, cartID string, quantity int) error
+	GetCartItemsByUserID(ctx context.Context, userID string) ([]models.CartItemResponse, error)
+	GetCartItemByProductID(ctx context.Context, userID string, productID string) (*models.CartItemResponse, error)
+	AddItemToCart(ctx context.Context, userID string, cartData *models.CartRequest) ([]models.CartItemResponse, error)
+	UpdateItemQuantity(ctx context.Context, productID string, userID string, req *models.UpdateCartRequest) ([]models.CartItemResponse, error)
+	RemoveItemFromCart(ctx context.Context, userID string, productID string) error
+	RestoreCartFromDB(ctx context.Context, userID string) ([]models.CartItemResponse, error)
+	ClearCart(ctx context.Context, userID string) error
+	CheckoutCart(ctx context.Context, userID string) error
 }
 
 type cartServiceImpl struct {
 	cartRepo    repositories.CartRepository
-	productRepo repositories.ProductRepository // Diperlukan untuk cek stok
+	productRepo repositories.ProductRepository
 }
 
 func NewCartService(cartRepo repositories.CartRepository, productRepo repositories.ProductRepository) CartService {
@@ -32,95 +35,169 @@ func NewCartService(cartRepo repositories.CartRepository, productRepo repositori
 	}
 }
 
-func (s *cartServiceImpl) FindAllCarts(ctx context.Context, userID string) ([]models.CartResponse, error) {
-	res, err := s.cartRepo.FindAllCarts(ctx, userID)
-
+func (s *cartServiceImpl) GetCartItemsByUserID(ctx context.Context, userID string) ([]models.CartItemResponse, error) {
+	cartItems, err := s.cartRepo.GetCartItemsByUserID(ctx, userID)
 	if err != nil {
-		if errors.Is(err, models.ErrProductNotFound) {
-			return nil, err
+		if stdErrors.Is(err, errors.ErrCartNotFound) {
+			return nil, errors.ErrCartNotFound
 		}
-
-		return nil, fmt.Errorf("service: failed to retrieve all carts for user %s: %w", userID, err)
+		log.Printf("Error in service getting cart for user %s: %v", userID, err)
+		return nil, err
 	}
-	if len(res) == 0 {
-		return nil, models.ErrCartItemNotFound
+
+	if len(cartItems) == 0 {
+		return nil, errors.ErrProductNotFound
+	}
+
+	var res []models.CartItemResponse
+	for _, cartItem := range cartItems {
+		res = append(res, *mapToCartResponse(userID, &cartItem))
 	}
 
 	return res, nil
 }
 
-func (s *cartServiceImpl) AddCart(ctx context.Context, userID, productID string, quantity int, description string) (*models.Cart, error) {
-	if productID == "" || quantity <= 0 {
-		return nil, fmt.Errorf("product ID and quantity are required and must be valid")
-	}
-
-	product, err := s.productRepo.FindProductByID(ctx, productID)
+func (s *cartServiceImpl) GetCartItemByProductID(ctx context.Context, userID string, productID string) (*models.CartItemResponse, error) {
+	cartItems, err := s.cartRepo.GetCartItemByProductID(ctx, userID, productID)
 	if err != nil {
-		if errors.Is(err, models.ErrProductNotFound) {
-			return nil, models.ErrProductNotFound
+		if stdErrors.Is(err, errors.ErrCartNotFound) {
+			return nil, errors.ErrCartNotFound
 		}
-
-		return nil, fmt.Errorf("service: failed to retrieve product details for product ID %s: %w", productID, err)
+		log.Printf("Error in service getting cart for user %s: %v", productID, err)
+		return nil, fmt.Errorf("failed to get cart items: %w", err)
 	}
 
-	if product.Stock < quantity {
-		return nil, fmt.Errorf("insufficient stock: Only %s items available", strconv.Itoa(product.Stock))
-	}
+	return mapToCartResponse(userID, cartItems), nil
+}
 
-	newCartID := helpers.GenerateNewUserID()
+func (s *cartServiceImpl) AddItemToCart(ctx context.Context, userID string, req *models.CartRequest) ([]models.CartItemResponse, error) {
 
-	err = s.cartRepo.AddCart(ctx, product, quantity, description, productID, newCartID, userID)
+	product, err := s.productRepo.GetProductByID(ctx, req.ProductID)
 	if err != nil {
-		return nil, fmt.Errorf("service: failed to add product to cart: %w", err)
+		if stdErrors.Is(err, errors.ErrCartNotFound) {
+			return nil, errors.ErrCartNotFound
+		}
+		return nil, fmt.Errorf("product not found: %w", err)
 	}
 
-	// Asumsikan cartRepo.AddCart memodifikasi atau mengembalikan cart item yang ditambahkan
-	// Jika tidak, Anda mungkin perlu mengambilnya dari repo lagi atau membuat struct di sini.
-	return &models.Cart{
-		ID:          newCartID,
-		ProductID:   productID,
+	// checking stock
+	if product.Stock < req.Quantity {
+		return nil, errors.ErrInvalidRequestPayload
+	}
+
+	cartID := helpers.GenerateNewID()
+
+	cartData := &models.Cart{
+		ID:          cartID,
+		ProductID:   req.ProductID,
 		UserID:      userID,
-		Quantity:    float64(quantity),
-		Description: description,
-	}, nil
+		Quantity:    req.Quantity,
+		Description: req.Description,
+	}
+
+	err = s.cartRepo.AddItemToCart(ctx, userID, cartID, cartData)
+	if err != nil {
+		log.Printf("Error in service adding item %s to cart for user %s: %v", cartData.ProductID, userID, err)
+		return nil, fmt.Errorf("failed to add item to cart: %w", err)
+	}
+
+	createdData, err := s.GetCartItemsByUserID(ctx, userID)
+	if err != nil {
+		log.Printf("Error in service getting created cart for user %s: %v", userID, err)
+	}
+
+	return createdData, nil
 }
 
-func (s *cartServiceImpl) DeleteCart(ctx context.Context, cartID, productID string) error {
-	if cartID == "" || productID == "" {
-		return fmt.Errorf("cart ID and product ID are required for deletion")
-	}
-
-	err := s.cartRepo.DeleteCart(ctx, cartID, productID)
+// RemoveItemFromCart menghapus item dari keranjang.
+func (s *cartServiceImpl) RemoveItemFromCart(ctx context.Context, userID string, productID string) error {
+	err := s.cartRepo.RemoveItemFromCart(ctx, userID, productID)
 	if err != nil {
-		if errors.Is(err, models.ErrCartItemNotFound) {
-			return models.ErrCartItemNotFound
+		if stdErrors.Is(err, errors.ErrCartNotFound) {
+			return errors.ErrCartNotFound
 		}
 
-		return fmt.Errorf("service: failed to delete cart item %s for product %s: %w", cartID, productID, err)
+		log.Printf("Error in service removing item %s from cart for user %s: %v", productID, userID, err)
+		return fmt.Errorf("gagal menghapus item dari keranjang: %w", err)
 	}
-
 	return nil
 }
 
-func (s *cartServiceImpl) UpdateCart(ctx context.Context, cartID string, quantity int) error {
-	if cartID == "" {
-		return fmt.Errorf("cart ID is required for update")
-	}
-	if quantity < 0 {
-		return fmt.Errorf("quantity cannot be negative")
+func (s *cartServiceImpl) UpdateItemQuantity(ctx context.Context, productID string, userID string, req *models.UpdateCartRequest) ([]models.CartItemResponse, error) {
+	cartData := &models.Cart{
+		Quantity: req.Quantity,
 	}
 
-	err := s.cartRepo.UpdateCart(ctx, cartID, quantity)
+	if req.Description != "" {
+		cartData.Description = req.Description
+	}
+
+	err := s.cartRepo.UpdateItemQuantity(ctx, productID, userID, cartData)
 	if err != nil {
-		if errors.Is(err, models.ErrCartItemNotFound) {
-			return models.ErrCartItemNotFound
-		}
-		if errors.Is(err, models.ErrInsufficientStock) {
-			return models.ErrInsufficientStock
+		if stdErrors.Is(err, errors.ErrCartNotFound) {
+			return nil, errors.ErrCartNotFound
 		}
 
-		return fmt.Errorf("service: failed to update cart item %s: %w", cartID, err)
+		log.Printf("Error in service updating item %s quantity for user %s: %v", productID, userID, err)
+		return nil, fmt.Errorf("gagal mengupdate kuantitas item: %w", err)
 	}
 
+	updatedCart, err := s.GetCartItemsByUserID(ctx, userID)
+	if err != nil {
+		log.Printf("Error in service getting updated cart for user %s: %v", userID, err)
+	}
+	return updatedCart, nil
+}
+
+func (s *cartServiceImpl) RestoreCartFromDB(ctx context.Context, userID string) ([]models.CartItemResponse, error) {
+	err := s.cartRepo.RestoreCartFromDB(ctx, userID)
+	if err != nil {
+		if stdErrors.Is(err, errors.ErrCartNotFound) {
+			return nil, errors.ErrCartNotFound
+		}
+
+		log.Printf("Error in service restoring cart for user %s: %v", userID, err)
+		return nil, fmt.Errorf("failed to restore cart: %w", err)
+	}
+
+	restoredCart, err := s.GetCartItemsByUserID(ctx, userID)
+	if err != nil {
+		log.Printf("Error in service getting restored cart for user %s: %v", userID, err)
+		return nil, fmt.Errorf("failed to get restored cart: %w", err)
+	}
+
+	return restoredCart, nil
+
+}
+
+func (s *cartServiceImpl) ClearCart(ctx context.Context, userID string) error {
+	err := s.cartRepo.ClearCart(ctx, userID)
+	if err != nil {
+		log.Printf("Error in service clearing cart for user %s: %v", userID, err)
+		return fmt.Errorf("failed to clean the cart: %w", err)
+	}
 	return nil
+}
+
+func (s *cartServiceImpl) CheckoutCart(ctx context.Context, userID string) error {
+	err := s.cartRepo.CheckoutCart(ctx, userID)
+	if err != nil {
+		log.Printf("Error in service processing checkout for user %s: %v", userID, err)
+		return fmt.Errorf("gagal memproses checkout: %w", err)
+	}
+	return nil
+}
+
+func mapToCartResponse(userID string, cart *models.CartItem) *models.CartItemResponse {
+	return &models.CartItemResponse{
+		ID:          cart.ID,
+		ProductID:   cart.ProductID,
+		ProductName: cart.ProductName,
+		Price:       cart.ProductPrice,
+		UserID:      userID,
+		Quantity:    cart.Quantity,
+		Description: cart.CartDescription,
+		CreatedAt:   cart.CreatedAt,
+		UpdatedAt:   cart.UpdatedAt,
+	}
 }

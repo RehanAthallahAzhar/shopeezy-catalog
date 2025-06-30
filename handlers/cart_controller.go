@@ -1,132 +1,178 @@
 package handlers
 
 import (
-	"errors"
-	"fmt"
+	"log"
 	"net/http"
-	"strconv"
 
+	"github.com/RehanAthallahAzhar/shopeezy-inventory-cart/helpers"
 	"github.com/RehanAthallahAzhar/shopeezy-inventory-cart/models"
+	"github.com/RehanAthallahAzhar/shopeezy-inventory-cart/pkg/errors"
 	"github.com/labstack/echo/v4"
 )
 
-// --- Implementasi Handler Cart ---
-
-func (api *API) CartList() echo.HandlerFunc {
+func (a *API) GetCartItemsByUserID() echo.HandlerFunc {
 	return func(c echo.Context) error {
 		ctx := c.Request().Context()
 
-		userID := c.Get("user_id").(string) // Dapatkan userID dari context
-
-		res, err := api.CartSvc.FindAllCarts(ctx, userID) // <-- Panggil service
+		userID, err := extractUserID(c)
 		if err != nil {
-			if errors.Is(err, models.ErrProductNotFound) { // Atau models.ErrCartEmpty jika Anda mendefinisikan
-				return c.JSON(http.StatusOK, models.SuccessResponse{Message: "Your cart is still empty, let's go shopping"})
-			}
-			return c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "Failed to retrieve cart items"})
+			return respondError(c, http.StatusUnauthorized, errors.ErrInvalidUserSession)
 		}
 
-		return c.JSON(http.StatusOK, res)
+		res, err := a.CartSvc.GetCartItemsByUserID(ctx, userID)
+		if err != nil {
+			return handleGetError(c, err)
+		}
+
+		return respondSuccess(c, userID, http.StatusOK, MsgCartRetrieved, res)
 	}
 }
 
-func (api *API) AddCart(c echo.Context) error {
+func (a *API) GetCartItemByProductID() echo.HandlerFunc {
+	return func(c echo.Context) error {
+		ctx := c.Request().Context()
+
+		userID, err := extractUserID(c)
+		if err != nil {
+			return respondError(c, http.StatusUnauthorized, errors.ErrInvalidUserSession)
+		}
+
+		productID, err := helpers.GetIDFromPathParam(c, "product_id")
+		if err != nil {
+			return respondError(c, http.StatusBadRequest, err)
+		}
+
+		res, err := a.CartSvc.GetCartItemByProductID(ctx, userID, productID)
+		if err != nil {
+			return handleGetError(c, err)
+		}
+
+		return respondSuccess(c, userID, http.StatusOK, MsgCartRetrieved, res)
+	}
+}
+
+func (a *API) AddToCart(c echo.Context) error {
 	ctx := c.Request().Context()
 
-	username := ""
-	if val := c.Get("username"); val != nil {
-		if u, ok := val.(string); ok {
-			username = u
-		}
-	}
-
-	productID := c.Param("product_id") // Parameter dari URL
-	userID := c.Get("user_id").(string)
-
-	var req models.CartRequest // Asumsikan CartRequest memiliki Quantity dan Description
-	if err := c.Bind(&req); err != nil {
-		return c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid JSON format"})
-	}
-
-	// Panggil service layer
-	addedCartItem, err := api.CartSvc.AddCart(ctx, userID, productID, req.Quantity, req.Description) // <-- Panggil service
+	userID, err := extractUserID(c)
 	if err != nil {
-		switch {
-		case errors.Is(err, models.ErrProductNotFound):
-			return c.JSON(http.StatusNotFound, models.ErrorResponse{Error: err.Error()})
-		case err.Error() == fmt.Sprintf("insufficient stock: Only %s items available", strconv.Itoa(0)): // Perbaiki string perbandingan
-			return c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: err.Error()})
-		default:
-			c.Logger().Errorf("CartService.AddCart failed: %v", err)
-			return c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "Failed to add product to cart."})
-		}
+		return respondError(c, http.StatusUnauthorized, errors.ErrInvalidUserSession)
 	}
-
-	return c.JSON(http.StatusCreated, models.SuccessResponse{ // Changed to StatusCreated
-		Username: username,
-		Message:  "Product Successfully Added to Cart!",
-		Data:     addedCartItem,
-	})
-}
-
-func (api *API) DeleteCart(c echo.Context) error {
-	ctx := c.Request().Context()
-
-	username := ""
-	if val := c.Get("username"); val != nil {
-		if u, ok := val.(string); ok {
-			username = u
-		}
-	}
-
-	cartID := c.Param("id")
-	productID := c.Param("product_id")
-
-	// Panggil service layer
-	err := api.CartSvc.DeleteCart(ctx, cartID, productID) // <-- Panggil service
-	if err != nil {
-		switch {
-		case errors.Is(err, models.ErrCartItemNotFound):
-			return c.JSON(http.StatusNotFound, models.ErrorResponse{Error: err.Error()})
-		default:
-			c.Logger().Errorf("CartService.DeleteCart failed: %v", err)
-			return c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "Failed to delete product from cart."})
-		}
-	}
-
-	return c.JSON(http.StatusOK, models.SuccessResponse{Username: username, Message: "Product Successfully Deleted from Cart!"})
-}
-
-func (api *API) UpdateCart(c echo.Context) error {
-	ctx := c.Request().Context()
-
-	username := ""
-	if val := c.Get("username"); val != nil {
-		if u, ok := val.(string); ok {
-			username = u
-		}
-	}
-
-	cartID := c.Param("cart_id")
 
 	var req models.CartRequest
 	if err := c.Bind(&req); err != nil {
-		return c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid JSON format or missing data"})
+		return respondError(c, http.StatusBadRequest, errors.ErrInvalidRequestPayload)
 	}
 
-	// Panggil service layer
-	err := api.CartSvc.UpdateCart(ctx, cartID, req.Quantity) // <-- Panggil service
+	res, err := a.CartSvc.AddItemToCart(ctx, userID, &req)
 	if err != nil {
-		switch {
-		case errors.Is(err, models.ErrCartItemNotFound):
-			return c.JSON(http.StatusNotFound, models.ErrorResponse{Error: "Cart item for this product not found!"})
-		case errors.Is(err, models.ErrInsufficientStock):
-			return c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: err.Error()})
-		default:
-			c.Logger().Errorf("CartService.UpdateCart failed: %v", err)
-			return c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "Failed to update cart item."})
-		}
+		return handleOperationError(c, err, MsgFailedToAddItemToCart)
 	}
 
-	return c.JSON(http.StatusOK, models.SuccessResponse{Username: username, Message: "Cart item updated successfully!"})
+	return respondSuccess(c, userID, http.StatusOK, MsgCartCreated, res)
+}
+
+func (a *API) UpdateCartItemQuantity(c echo.Context) error {
+	ctx := c.Request().Context()
+
+	userID, err := extractUserID(c)
+	if err != nil {
+		return respondError(c, http.StatusUnauthorized, errors.ErrInvalidUserSession)
+	}
+
+	productID, err := helpers.GetIDFromPathParam(c, "product_id")
+	if err != nil {
+		return respondError(c, http.StatusBadRequest, err)
+	}
+
+	var req models.UpdateCartRequest
+	if err := c.Bind(&req); err != nil {
+		return c.JSON(http.StatusBadRequest, errors.ErrInvalidRequestPayload)
+	}
+
+	res, err := a.CartSvc.UpdateItemQuantity(ctx, productID, userID, &req)
+	if err != nil {
+		return handleOperationError(c, err, MsgFailedToUpdateCart)
+	}
+
+	return respondSuccess(c, userID, http.StatusOK, MsgCartUpdated, res)
+}
+
+func (a *API) RemoveFromCart(c echo.Context) error {
+	ctx := c.Request().Context()
+
+	userID, err := extractUserID(c)
+	if err != nil {
+		return respondError(c, http.StatusUnauthorized, errors.ErrInvalidUserSession)
+	}
+
+	productID, err := helpers.GetIDFromPathParam(c, "product_id")
+	if err != nil {
+		return respondError(c, http.StatusBadRequest, err)
+	}
+
+	err = a.CartSvc.RemoveItemFromCart(ctx, userID, productID)
+	if err != nil {
+		return handleOperationError(c, err, MsgFailedToUpdateCart)
+	}
+
+	return respondSuccess(c, userID, http.StatusOK, MsgCartDeleted, nil)
+}
+
+func (a *API) RestoreCart(c echo.Context) error {
+	ctx := c.Request().Context()
+
+	userID, err := extractUserID(c)
+	if err != nil {
+		return respondError(c, http.StatusUnauthorized, errors.ErrInvalidUserSession)
+	}
+
+	res, err := a.CartSvc.RestoreCartFromDB(ctx, userID)
+	if err != nil {
+		return handleOperationError(c, err, MsgFailedToRestoreCart)
+	}
+
+	return respondSuccess(c, userID, http.StatusOK, "Cart restored successfully", res)
+}
+
+func (a *API) ClearCart(c echo.Context) error {
+	ctx := c.Request().Context()
+
+	userID, err := extractUserID(c)
+	if err != nil {
+		return respondError(c, http.StatusUnauthorized, errors.ErrInvalidUserSession)
+	}
+
+	err = a.CartSvc.ClearCart(ctx, userID)
+	if err != nil {
+		if err == errors.ErrCartNotFound {
+			return respondError(c, http.StatusNotFound, errors.ErrCartNotFound)
+		}
+
+		log.Printf("Error in ClearCart handler: %v", err)
+		return c.JSON(http.StatusInternalServerError, echo.Map{"message": "Failed to clear cart"})
+	}
+
+	return respondSuccess(c, userID, http.StatusOK, MsgCartCleared, nil)
+}
+
+func (a *API) CheckoutCart(c echo.Context) error {
+	ctx := c.Request().Context()
+
+	userID, err := extractUserID(c)
+	if err != nil {
+		return respondError(c, http.StatusUnauthorized, errors.ErrInvalidUserSession)
+	}
+
+	err = a.CartSvc.CheckoutCart(ctx, userID)
+	if err != nil {
+		if err == errors.ErrCartNotFound {
+			return respondError(c, http.StatusNotFound, errors.ErrCartNotFound)
+		}
+
+		log.Printf("Error in CheckoutCart handler: %v", err)
+		return c.JSON(http.StatusInternalServerError, echo.Map{"message": "Failed to checkout cart"})
+	}
+
+	return respondSuccess(c, userID, http.StatusOK, MsgCartCheckedOut, nil)
 }

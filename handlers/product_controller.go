@@ -1,167 +1,184 @@
 package handlers
 
 import (
-	"errors"
-	"fmt"
 	"net/http"
+
+	"github.com/labstack/echo/v4"
 
 	"github.com/RehanAthallahAzhar/shopeezy-inventory-cart/helpers"
 	"github.com/RehanAthallahAzhar/shopeezy-inventory-cart/models"
-
-	"github.com/labstack/echo/v4"
+	"github.com/RehanAthallahAzhar/shopeezy-inventory-cart/pkg/errors"
 )
 
-func (api *API) ProductList() echo.HandlerFunc {
+func (api *API) GetAllProducts() echo.HandlerFunc {
 	return func(c echo.Context) error {
 		ctx := c.Request().Context()
-
 		c.Logger().Infof("Received request for product list from IP: %s", c.RealIP())
 
-		res, err := api.ProductSvc.FindAllProducts(ctx)
+		username, err := extractUsername(c)
 		if err != nil {
-			if errors.Is(err, models.ErrProductNotFound) {
-
-				return c.JSON(http.StatusNotFound, models.ErrorResponse{Error: err.Error()})
-			}
-
-			return c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "Failed to retrieve products"})
+			return respondError(c, http.StatusUnauthorized, errors.ErrInvalidUserSession)
 		}
 
-		return c.JSON(http.StatusOK, res)
+		res, err := api.ProductSvc.GetAllProducts(ctx)
+		if err != nil {
+			return handleGetError(c, err)
+		}
+
+		return respondSuccess(c, username, http.StatusOK, MsgProductRetrieved, res)
 	}
 }
 
-func (api *API) SellerProductList() echo.HandlerFunc {
+func (api *API) GetProductsByName() echo.HandlerFunc {
 	return func(c echo.Context) error {
 		ctx := c.Request().Context()
 
-		sellerId := c.Get("user_id").(string)
-
-		res, err := api.ProductSvc.FindProductBySellerID(ctx, sellerId)
+		username, err := extractUsername(c)
 		if err != nil {
-			if errors.Is(err, models.ErrProductNotFound) {
-
-				return c.JSON(http.StatusNotFound, models.ErrorResponse{Error: err.Error()})
-			}
-
-			return c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "Failed to retrieve products"})
+			return respondError(c, http.StatusUnauthorized, errors.ErrInvalidUserSession)
 		}
 
-		return c.JSON(http.StatusOK, res)
+		ProductName, err := helpers.GetFromPathParam(c, "tag")
+		if err != nil {
+			return respondError(c, http.StatusBadRequest, err)
+		}
+
+		res, err := api.ProductSvc.GetProductsByName(ctx, ProductName)
+		if err != nil {
+			return handleGetError(c, err)
+		}
+
+		return respondSuccess(c, username, http.StatusOK, MsgProductRetrieved, res)
 	}
 }
 
-func (api *API) AddProduct(c echo.Context) error {
+func (api *API) GetProductByID() echo.HandlerFunc {
+	return func(c echo.Context) error {
+		ctx := c.Request().Context()
+
+		c.Logger().Infof("Received request for GetProductByID from IP: %s", c.RealIP())
+
+		username, err := extractUsername(c)
+		if err != nil {
+			return respondError(c, http.StatusUnauthorized, errors.ErrInvalidUserSession)
+		}
+
+		productID, err := helpers.GetIDFromPathParam(c, "id")
+		if err != nil {
+			return respondError(c, http.StatusBadRequest, err)
+		}
+
+		res, err := api.ProductSvc.GetProductByID(ctx, productID)
+		if err != nil {
+			return handleGetError(c, err)
+		}
+
+		return respondSuccess(c, username, http.StatusOK, MsgProductRetrieved, res)
+	}
+}
+
+func (api *API) GetProductsBySellerID() echo.HandlerFunc {
+	return func(c echo.Context) error {
+		ctx := c.Request().Context()
+
+		username, err := extractUsername(c)
+		if err != nil {
+			return respondError(c, http.StatusUnauthorized, errors.ErrInvalidUserSession)
+		}
+
+		sellerID, err := helpers.GetIDFromPathParam(c, "seller_id")
+		if err != nil {
+			return respondError(c, http.StatusBadRequest, err)
+		}
+
+		res, err := api.ProductSvc.GetProductsBySellerID(ctx, sellerID)
+		if err != nil {
+			return handleGetError(c, err)
+		}
+
+		return respondSuccess(c, username, http.StatusOK, MsgProductRetrieved, res)
+	}
+}
+
+func (api *API) CreateProduct(c echo.Context) error {
 	ctx := c.Request().Context()
 
-	username := ""
-	if val := c.Get("username"); val != nil {
-		if u, ok := val.(string); ok {
-			username = u
-		}
-	}
-
-	userID := c.Get("user_id").(string)
-
-	role, ok := c.Get("role").(string)
-	if !ok || role == "" {
-		c.Logger().Warnf("Role not found in context for user %s (ID: %s), defaulting to 'guest'", username, userID)
-		role = "guest" // Default role to prevent errors
-	}
-
-	var product models.Product
-	if err := c.Bind(&product); err != nil {
-		return c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid JSON format"})
-	}
-
-	product.ID = helpers.GenerateNewUserID()
-
-	addedProduct, err := api.ProductSvc.AddProduct(ctx, userID, username, role, &product)
+	userID, err := extractUserID(c)
 	if err != nil {
-		// spesific errors
-		switch err.Error() {
-		case fmt.Sprintf("role '%s' is not allowed to add products", role):
-			return c.JSON(http.StatusForbidden, models.ErrorResponse{Error: err.Error()})
-		case "all required columns must not be empty and valid":
-			return c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: err.Error()})
-		default:
-			c.Logger().Errorf("ProductService.AddProduct failed: %v", err)
-			return c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "Internal Server Error: Failed to add product"})
-		}
+		return respondError(c, http.StatusUnauthorized, errors.ErrInvalidUserSession)
 	}
 
-	return c.JSON(http.StatusCreated, models.SuccessResponse{
-		Username: username,
-		Message:  "Product Added Successfully!",
-		Data:     addedProduct,
-	})
+	username, err := extractUsername(c)
+	if err != nil {
+		return respondError(c, http.StatusUnauthorized, errors.ErrInvalidUserSession)
+	}
+
+	var req models.ProductRequest
+	if err := c.Bind(&req); err != nil {
+		return respondError(c, http.StatusBadRequest, errors.ErrInvalidRequestPayload)
+	}
+
+	res, err := api.ProductSvc.CreateProduct(ctx, userID, &req)
+	if err != nil {
+		return handleOperationError(c, err, MsgFailedToCreateProduct)
+	}
+
+	return respondSuccess(c, username, http.StatusCreated, MsgProductCreated, res)
 }
 
 func (api *API) UpdateProduct(c echo.Context) error {
 	ctx := c.Request().Context()
 
-	username := ""
-	if val := c.Get("username"); val != nil {
-		if u, ok := val.(string); ok {
-			username = u
-		}
-	}
-
-	productID := c.Param("id")
-	sellerID := c.Get("user_id").(string)
-
-	var productData models.Product
-	if err := c.Bind(&productData); err != nil {
-		return c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: "Invalid JSON format"})
-	}
-
-	updatedProduct, err := api.ProductSvc.UpdateProduct(ctx, productID, &productData, sellerID)
+	userID, err := extractUserID(c)
 	if err != nil {
-		switch {
-		case errors.Is(err, models.ErrProductNotFound):
-
-			return c.JSON(http.StatusNotFound, models.ErrorResponse{Error: err.Error()})
-		case err.Error() == "all required columns must not be empty and valid for update":
-
-			return c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: err.Error()})
-		case err.Error() == "service: product does not belong to this seller":
-
-			return c.JSON(http.StatusForbidden, models.ErrorResponse{Error: err.Error()})
-		default:
-			c.Logger().Errorf("ProductService.UpdateProduct failed: %v", err)
-
-			return c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "Failed to update product"})
-		}
+		return respondError(c, http.StatusUnauthorized, errors.ErrInvalidUserSession)
 	}
 
-	return c.JSON(http.StatusOK, models.SuccessResponse{Username: username, Message: "Product updated successfully", Data: updatedProduct})
+	username, err := extractUsername(c)
+	if err != nil {
+		return respondError(c, http.StatusUnauthorized, errors.ErrInvalidUserSession)
+	}
+
+	productID, err := helpers.GetIDFromPathParam(c, "id")
+	if err != nil {
+		return respondError(c, http.StatusBadRequest, err)
+	}
+
+	var productData models.ProductRequest
+	if err := c.Bind(&productData); err != nil {
+		return respondError(c, http.StatusBadRequest, errors.ErrInvalidRequestPayload)
+	}
+
+	res, err := api.ProductSvc.UpdateProduct(ctx, productID, &productData, userID)
+	if err != nil {
+		return handleOperationError(c, err, MsgFailedToUpdateProduct)
+	}
+
+	return respondSuccess(c, username, http.StatusOK, MsgProductUpdated, res)
 }
 
 func (api *API) DeleteProduct(c echo.Context) error {
 	ctx := c.Request().Context()
 
-	username := ""
-	if val := c.Get("username"); val != nil {
-		if u, ok := val.(string); ok {
-			username = u
-		}
-	}
-
-	productID := c.Param("id")
-	sellerID := c.Get("user_id")
-
-	err := api.ProductSvc.DeleteProduct(ctx, productID, sellerID.(string))
+	sellerID, err := extractUserID(c)
 	if err != nil {
-		switch {
-		case errors.Is(err, models.ErrProductNotFound):
-			return c.JSON(http.StatusNotFound, models.ErrorResponse{Error: err.Error()})
-		case err.Error() == "service: product does not belong to this seller":
-			return c.JSON(http.StatusForbidden, models.ErrorResponse{Error: err.Error()})
-		default:
-			c.Logger().Errorf("ProductService.DeleteProduct failed: %v", err)
-			return c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: "Failed to delete product"})
-		}
+		return respondError(c, http.StatusUnauthorized, errors.ErrInvalidUserSession)
 	}
 
-	return c.JSON(http.StatusOK, models.SuccessResponse{Username: username, Message: "Product deleted successfully"})
+	username, err := extractUsername(c)
+	if err != nil {
+		return respondError(c, http.StatusUnauthorized, errors.ErrInvalidUserSession)
+	}
+
+	productID, err := helpers.GetIDFromPathParam(c, "id")
+	if err != nil {
+		return respondError(c, http.StatusBadRequest, err)
+	}
+
+	err = api.ProductSvc.DeleteProduct(ctx, productID, sellerID)
+	if err != nil {
+		return handleOperationError(c, err, MsgFailedToDeleteProduct)
+	}
+
+	return respondSuccess(c, username, http.StatusOK, MsgProductDeleted, nil)
 }
