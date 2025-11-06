@@ -12,8 +12,9 @@ import (
 	"github.com/google/uuid"
 )
 
-const deleteCart = `-- name: DeleteCart :exec
+const deleteCart = `-- name: DeleteCart :one
 DELETE FROM carts WHERE id = $1 AND product_id = $2
+RETURNING id, user_id, product_id, quantity, description, created_at, updated_at
 `
 
 type DeleteCartParams struct {
@@ -21,9 +22,19 @@ type DeleteCartParams struct {
 	ProductID uuid.UUID
 }
 
-func (q *Queries) DeleteCart(ctx context.Context, arg DeleteCartParams) error {
-	_, err := q.db.ExecContext(ctx, deleteCart, arg.ID, arg.ProductID)
-	return err
+func (q *Queries) DeleteCart(ctx context.Context, arg DeleteCartParams) (Cart, error) {
+	row := q.db.QueryRowContext(ctx, deleteCart, arg.ID, arg.ProductID)
+	var i Cart
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.ProductID,
+		&i.Quantity,
+		&i.Description,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
 }
 
 const getCartItem = `-- name: GetCartItem :one
@@ -85,9 +96,10 @@ func (q *Queries) GetCartItems(ctx context.Context, userID uuid.UUID) ([]Cart, e
 	return items, nil
 }
 
-const insertCartItem = `-- name: InsertCartItem :exec
+const insertCartItem = `-- name: InsertCartItem :one
 INSERT INTO carts (id, user_id, product_id, quantity, "description")
 VALUES ($1, $2, $3, $4, $5)
+RETURNING id, user_id, product_id, quantity, description, created_at, updated_at
 `
 
 type InsertCartItemParams struct {
@@ -98,21 +110,32 @@ type InsertCartItemParams struct {
 	Description sql.NullString
 }
 
-func (q *Queries) InsertCartItem(ctx context.Context, arg InsertCartItemParams) error {
-	_, err := q.db.ExecContext(ctx, insertCartItem,
+func (q *Queries) InsertCartItem(ctx context.Context, arg InsertCartItemParams) (Cart, error) {
+	row := q.db.QueryRowContext(ctx, insertCartItem,
 		arg.ID,
 		arg.UserID,
 		arg.ProductID,
 		arg.Quantity,
 		arg.Description,
 	)
-	return err
+	var i Cart
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.ProductID,
+		&i.Quantity,
+		&i.Description,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
 }
 
-const updateCartItem = `-- name: UpdateCartItem :exec
+const updateCartItem = `-- name: UpdateCartItem :one
 UPDATE carts
 SET quantity = $1, "description" = $2
 WHERE user_id = $3 AND product_id = $4
+RETURNING id, user_id, product_id, quantity, description, created_at, updated_at
 `
 
 type UpdateCartItemParams struct {
@@ -122,12 +145,22 @@ type UpdateCartItemParams struct {
 	ProductID   uuid.UUID
 }
 
-func (q *Queries) UpdateCartItem(ctx context.Context, arg UpdateCartItemParams) error {
-	_, err := q.db.ExecContext(ctx, updateCartItem,
+func (q *Queries) UpdateCartItem(ctx context.Context, arg UpdateCartItemParams) (Cart, error) {
+	row := q.db.QueryRowContext(ctx, updateCartItem,
 		arg.Quantity,
 		arg.Description,
 		arg.UserID,
 		arg.ProductID,
 	)
-	return err
+	var i Cart
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.ProductID,
+		&i.Quantity,
+		&i.Description,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
 }

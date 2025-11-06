@@ -2,219 +2,285 @@ package services
 
 import (
 	"context"
-	"encoding/json"
-	stdErrors "errors"
 	"fmt"
-	"log"
+	"time"
 
-	"github.com/RehanAthallahAzhar/shopeezy-inventory-cart/internal/entities"
-	"github.com/RehanAthallahAzhar/shopeezy-inventory-cart/internal/helpers"
-	"github.com/RehanAthallahAzhar/shopeezy-inventory-cart/internal/models"
-	"github.com/RehanAthallahAzhar/shopeezy-inventory-cart/internal/models/converters"
-	"github.com/RehanAthallahAzhar/shopeezy-inventory-cart/internal/pkg/errors"
-	"github.com/RehanAthallahAzhar/shopeezy-inventory-cart/internal/pkg/rabbitmq"
-	"github.com/RehanAthallahAzhar/shopeezy-inventory-cart/internal/repositories"
 	"github.com/google/uuid"
+	"github.com/sirupsen/logrus"
+
+	"github.com/RehanAthallahAzhar/shopeezy-catalog/internal/entities"
+	"github.com/RehanAthallahAzhar/shopeezy-catalog/internal/helpers"
+	"github.com/RehanAthallahAzhar/shopeezy-catalog/internal/models"
+	"github.com/RehanAthallahAzhar/shopeezy-catalog/internal/pkg/redis"
+	"github.com/RehanAthallahAzhar/shopeezy-catalog/internal/repositories"
+
+	accountpb "github.com/RehanAthallahAzhar/shopeezy-protos/pb/account"
 )
 
+type CartSource interface {
+	models.RedisCartItem
+}
+
 type CartService interface {
-	GetCartItemsByUserID(ctx context.Context, userID uuid.UUID) ([]models.CartItemResponse, error)
-	GetCartItemByProductID(ctx context.Context, userID, productID uuid.UUID) (*models.CartItemResponse, error)
-	AddItemToCart(ctx context.Context, userID uuid.UUID, cartData *models.CartRequest) ([]models.CartItemResponse, error)
-	UpdateItemQuantity(ctx context.Context, productID, userID uuid.UUID, req *models.UpdateCartRequest) ([]models.CartItemResponse, error)
+	AddItemToCart(ctx context.Context, userID, productID uuid.UUID, req *models.CartRequest) (*entities.CartItem, error)
+	GetCartItemsByUserID(ctx context.Context, userID uuid.UUID) (*entities.Cart, error)
+	UpdateItem(ctx context.Context, userID, productID uuid.UUID, newQuantity int, newDescription string) error
 	RemoveItemFromCart(ctx context.Context, userID, productID uuid.UUID) error
-	RestoreCartFromDB(ctx context.Context, userID uuid.UUID) ([]models.CartItemResponse, error)
-	CheckoutCart(ctx context.Context, userID uuid.UUID) error
 }
 
 type cartServiceImpl struct {
-	cartRepo       repositories.CartRepository
-	productRepo    repositories.ProductRepository
-	rabbitmqClient *rabbitmq.RabbitMQClient // Tambahkan RabbitMQClient
+	cartRepo      repositories.CartRepository
+	productSvc    ProductService
+	redisClient   *redis.RedisClient
+	accountClient accountpb.AccountServiceClient
+	log           *logrus.Logger
 }
 
-func NewCartService(cartRepo repositories.CartRepository, productRepo repositories.ProductRepository, rabbitmqClient *rabbitmq.RabbitMQClient) CartService {
+func NewCartService(
+	repo repositories.CartRepository,
+	productSvc ProductService,
+	redis *redis.RedisClient,
+	accountClient accountpb.AccountServiceClient,
+	log *logrus.Logger,
+) CartService {
 	return &cartServiceImpl{
-		cartRepo:       cartRepo,
-		productRepo:    productRepo,
-		rabbitmqClient: rabbitmqClient,
+		cartRepo:      repo,
+		productSvc:    productSvc,
+		redisClient:   redis,
+		accountClient: accountClient,
+		log:           log,
 	}
 }
 
-func (s *cartServiceImpl) GetCartItemsByUserID(ctx context.Context, userID uuid.UUID) ([]models.CartItemResponse, error) {
-	cartItems, err := s.cartRepo.GetCartItemsByUserID(ctx, userID)
+func (s *cartServiceImpl) AddItemToCart(ctx context.Context, userID, productID uuid.UUID, req *models.CartRequest) (*entities.CartItem, error) {
+	logger := s.log.WithFields(logrus.Fields{
+		"user_id":    userID,
+		"product_id": productID,
+		"quantity":   req.Quantity,
+	})
+	logger.Info("Starting the process of adding items to the cart")
+
+	if req.Quantity <= 0 {
+		return nil, fmt.Errorf("the quantity must be greater than 0")
+	}
+
+	// product
+	productsResponse, err := s.productSvc.GetProductByID(ctx, productID)
 	if err != nil {
-		if stdErrors.Is(err, errors.ErrCartNotFound) {
-			return nil, errors.ErrCartNotFound
-		}
-		log.Printf("Error in service getting cart for user %s: %v", userID, err)
+		logger.WithError(err).Warn("Product not found or Product Service error")
+		return nil, fmt.Errorf("invalid or not found product")
+	}
+
+	// account
+	accountDetail, err := s.fetchAccountDetail(ctx, productsResponse.SellerID.String())
+	if err != nil {
 		return nil, err
 	}
 
-	if len(cartItems) == 0 {
-		return nil, errors.ErrProductNotFound
+	if productsResponse.Stock < req.Quantity {
+		logger.WithError(err).Warn("Product not found or Product Service error")
+		return nil, fmt.Errorf("insufficient stock")
 	}
 
-	var res []models.CartItemResponse
-	for _, cartItem := range cartItems {
-		res = append(res, *converters.MapToCartResponse(userID, &cartItem))
-	}
-
-	return res, nil
-}
-
-func (s *cartServiceImpl) GetCartItemByProductID(ctx context.Context, userID, productID uuid.UUID) (*models.CartItemResponse, error) {
-	cartItems, err := s.cartRepo.GetCartItemByProductID(ctx, userID, productID)
-	if err != nil {
-		if stdErrors.Is(err, errors.ErrCartNotFound) {
-			return nil, errors.ErrCartNotFound
-		}
-		log.Printf("Error in service getting cart for user %s: %v", productID, err)
-		return nil, fmt.Errorf("failed to get cart items: %w", err)
-	}
-
-	return converters.MapToCartResponse(userID, cartItems), nil
-}
-
-func (s *cartServiceImpl) AddItemToCart(ctx context.Context, userID uuid.UUID, req *models.CartRequest) ([]models.CartItemResponse, error) {
-
-	product, err := s.productRepo.GetProductByID(ctx, req.ProductID)
-	if err != nil {
-		if stdErrors.Is(err, errors.ErrCartNotFound) {
-			return nil, errors.ErrCartNotFound
-		}
-		return nil, fmt.Errorf("product not found: %w", err)
-	}
-
-	// checking stock
-	if product.Stock < req.Quantity {
-		return nil, errors.ErrInvalidRequestPayload
-	}
-
-	cartID := helpers.GenerateNewID()
-
-	cartData := &entities.Cart{
-		ID:          cartID,
-		ProductID:   req.ProductID,
-		UserID:      userID,
+	item := models.RedisCartItem{
 		Quantity:    req.Quantity,
 		Description: req.Description,
+		Checked:     true,
+		AddedAt:     time.Now(),
 	}
 
-	err = s.cartRepo.AddItemToCart(ctx, userID, cartID, cartData)
+	if err := s.cartRepo.AddItem(ctx, userID, productID, item); err != nil {
+		logger.WithError(err).Error("Gagal saat memanggil repository untuk menambah item")
+		return nil, err
+	}
+
+	logger.Info("Item successfully added to cart")
+
+	return toDomainCartItem(productID, item, productsResponse, accountDetail.Name), nil
+}
+
+func (s *cartServiceImpl) GetCartItemsByUserID(ctx context.Context, userID uuid.UUID) (*entities.Cart, error) {
+	logger := s.log.WithField("user_id", userID)
+	logger.Info("Retrieving items from the user's cart")
+
+	itemsMap, err := s.cartRepo.GetAllItems(ctx, userID)
 	if err != nil {
-		log.Printf("Error in service adding item %s to cart for user %s: %v", cartData.ProductID, userID, err)
-		return nil, fmt.Errorf("failed to add item to cart: %w", err)
+		return nil, err
 	}
 
-	createdData, err := s.GetCartItemsByUserID(ctx, userID)
+	if len(itemsMap) == 0 {
+		return &entities.Cart{
+			UserID:     userID,
+			Items:      []entities.CartItem{},
+			TotalItems: 0,
+		}, nil
+	}
+
+	var productIDs []uuid.UUID
+	for idStr := range itemsMap {
+		uuid, err := helpers.StringToUUID(idStr)
+		if err != nil {
+			return nil, fmt.Errorf("error converting string to UUID: %w", err)
+		}
+		productIDs = append(productIDs, uuid)
+	}
+
+	productsResponse, err := s.productSvc.GetProductByIDs(ctx, productIDs)
 	if err != nil {
-		log.Printf("Error in service getting created cart for user %s: %v", userID, err)
+		logger.WithError(err).Error("Gagal mengambil detail produk dari Product Service")
+		return nil, fmt.Errorf("gagal mengambil detail produk: %w", err)
+	}
+	productDetailsMap := make(map[string]*entities.Product)
+	for _, p := range productsResponse {
+		productDetailsMap[p.ID.String()] = &p
 	}
 
-	return createdData, nil
+	sellerIDMap := make(map[string]bool)
+	for _, productID := range productIDs {
+		productDetail, ok := productDetailsMap[productID.String()]
+		if !ok {
+			logger.WithField("product_id", productID.String()).Warn("Detail produk tidak ditemukan, item dilewati.")
+			continue
+		}
+
+		sellerIDMap[productDetail.SellerID.String()] = true
+	}
+
+	var sellerIDs []string
+	for sellerID := range sellerIDMap {
+		sellerIDs = append(sellerIDs, sellerID)
+	}
+
+	// account
+	accountDetailMap, err := s.fetchAccountDetails(ctx, sellerIDs)
+	if err != nil {
+		return nil, err
+	}
+
+	finalItems := make([]entities.CartItem, 0, len(itemsMap))
+	for productIDStr, redisItem := range itemsMap {
+		productDetail, ok := productDetailsMap[productIDStr]
+		if !ok {
+			logger.WithField("product_id", productIDStr).Warn("Detail produk tidak ditemukan, item dilewati.")
+			continue
+		}
+
+		productID, _ := uuid.Parse(productIDStr)
+		sellerName := accountDetailMap[productDetail.SellerID.String()].Name
+
+		assembledItem := toDomainCartItem(productID, redisItem, productDetail, sellerName)
+		finalItems = append(finalItems, *assembledItem)
+	}
+
+	finalCart := toDomainCart(userID, finalItems)
+
+	logger.Info("Successfully retrieved and enriched the basket items")
+	return finalCart, nil
+}
+
+func (s *cartServiceImpl) UpdateItem(ctx context.Context, userID, productID uuid.UUID, newQuantity int, newDescription string) error {
+	logger := s.log.WithFields(logrus.Fields{"user_id": userID, "product_id": productID, "new_quantity": newQuantity})
+
+	if userID == uuid.Nil || productID == uuid.Nil {
+		return fmt.Errorf("invalid user ID or product ID")
+	}
+
+	if newQuantity == 0 {
+		logger.Info("Quantity is 0, removing item from cart")
+		return s.cartRepo.RemoveItem(ctx, userID, productID)
+	}
+
+	if newQuantity < 0 {
+		return fmt.Errorf("kuantitas tidak boleh negatif")
+	}
+
+	if newDescription == "" {
+		return fmt.Errorf("the description cannot be empty")
+	}
+
+	logger.Info("Call Product Service for stock validation")
+
+	productsSvc, err := s.productSvc.GetProductByID(ctx, productID)
+	if err != nil {
+		logger.WithError(err).Error("Failed to retrieve product details from Product Service")
+		return fmt.Errorf("failed to retrieve product details: %w", err)
+	}
+
+	if int(productsSvc.Stock) < newQuantity {
+		logger.Warnf("Stock is insufficient. Requested: %d, Available: %d", newQuantity, productsSvc.Stock)
+		return fmt.Errorf("insufficient stock for product '%s'", productsSvc.Name) // Ganti dengan apperrors
+	}
+
+	return s.cartRepo.UpdateItem(ctx, userID, productID, newQuantity, newDescription)
 }
 
 func (s *cartServiceImpl) RemoveItemFromCart(ctx context.Context, userID, productID uuid.UUID) error {
-	err := s.cartRepo.RemoveItemFromCart(ctx, userID, productID)
-	if err != nil {
-		if stdErrors.Is(err, errors.ErrCartNotFound) {
-			return errors.ErrCartNotFound
-		}
-
-		log.Printf("Error in service removing item %s from cart for user %s: %v", productID, userID, err)
-		return fmt.Errorf("gagal menghapus item dari keranjang: %w", err)
+	if userID == uuid.Nil || productID == uuid.Nil {
+		return fmt.Errorf("invalid user ID or product ID")
 	}
-	return nil
+
+	logger := s.log.WithFields(logrus.Fields{
+		"user_id":    userID,
+		"product_id": productID,
+	})
+	logger.Info("Remove items from cart")
+
+	return s.cartRepo.RemoveItem(ctx, userID, productID)
 }
 
-func (s *cartServiceImpl) UpdateItemQuantity(ctx context.Context, productID, userID uuid.UUID, req *models.UpdateCartRequest) ([]models.CartItemResponse, error) {
-	cartData := &entities.Cart{
-		Quantity: req.Quantity,
-	}
+// ------- HELPERS -------
 
-	if req.Description != "" {
-		cartData.Description = req.Description
-	}
-
-	err := s.cartRepo.UpdateItemQuantity(ctx, productID, userID, cartData)
+func (s *cartServiceImpl) fetchAccountDetail(ctx context.Context, sellerID string) (*accountpb.User, error) {
+	accountResponse, err := s.accountClient.GetUser(ctx, &accountpb.GetUserRequest{Id: sellerID})
 	if err != nil {
-		if stdErrors.Is(err, errors.ErrCartNotFound) {
-			return nil, errors.ErrCartNotFound
-		}
-
-		log.Printf("Error in service updating item %s quantity for user %s: %v", productID, userID, err)
-		return nil, fmt.Errorf("gagal mengupdate kuantitas item: %w", err)
+		return nil, fmt.Errorf("failed to retrieve seller details via gRPC: %w", err)
 	}
 
-	updatedCart, err := s.GetCartItemsByUserID(ctx, userID)
-	if err != nil {
-		log.Printf("Error in service getting updated cart for user %s: %v", userID, err)
-	}
-	return updatedCart, nil
+	return accountResponse, nil
 }
 
-func (s *cartServiceImpl) RestoreCartFromDB(ctx context.Context, userID uuid.UUID) ([]models.CartItemResponse, error) {
-	err := s.cartRepo.RestoreCartFromDB(ctx, userID)
+func (s *cartServiceImpl) fetchAccountDetails(ctx context.Context, sellerIDs []string) (map[string]*accountpb.User, error) {
+	accountResponse, err := s.accountClient.GetUsers(ctx, &accountpb.GetUsersRequest{Ids: sellerIDs})
 	if err != nil {
-		if stdErrors.Is(err, errors.ErrCartNotFound) {
-			return nil, errors.ErrCartNotFound
-		}
-
-		log.Printf("Error in service restoring cart for user %s: %v", userID, err)
-		return nil, fmt.Errorf("failed to restore cart: %w", err)
+		return nil, fmt.Errorf("failed to retrieve seller details via gRPC: %w", err)
 	}
 
-	restoredCart, err := s.GetCartItemsByUserID(ctx, userID)
-	if err != nil {
-		log.Printf("Error in service getting restored cart for user %s: %v", userID, err)
-		return nil, fmt.Errorf("failed to get restored cart: %w", err)
+	accountDetailsMap := make(map[string]*accountpb.User)
+	for _, a := range accountResponse.Users {
+		accountDetailsMap[a.Id] = a
 	}
 
-	return restoredCart, nil
-
+	return accountDetailsMap, nil
 }
 
-func (s *cartServiceImpl) CheckoutCart(ctx context.Context, userID uuid.UUID) error {
-	// Lakukan checkout di repository (yang akan memindahkan data ke DB, mengurangi stok, dll.)
-	order, err := s.cartRepo.CheckoutCart(ctx, userID) // Asumsi CheckoutCart repo mengembalikan *models.Order
-	if err != nil {
-		log.Printf("Error in service processing checkout for user %s: %v", userID, err)
-		return fmt.Errorf("gagal memproses checkout: %w", err)
+func toDomainCartItem(
+	productID uuid.UUID,
+	redisItem models.RedisCartItem,
+	productDetail *entities.Product,
+	sellerName string,
+) *entities.CartItem {
+	return &entities.CartItem{
+		ProductID:       productID,
+		ProductName:     productDetail.Name,
+		ProductImageURL: "", // Anda bisa tambahkan ini dari productDetail nanti
+		Price:           float64(productDetail.Price),
+		Stock:           int(productDetail.Stock),
+		SellerID:        productDetail.SellerID,
+		SellerName:      sellerName,
+		Quantity:        redisItem.Quantity,
+		Description:     redisItem.Description,
+		Checked:         redisItem.Checked,
 	}
+}
 
-	// --- Publikasikan Event OrderCreated ke RabbitMQ ---
-	productIDs := make([]string, 0)
-	quantities := make(map[string]int)
-	for _, item := range order.OrderItems {
-		productIDs = append(productIDs, item.ProductID.String())
-		quantities[item.ProductID.String()] = item.Quantity
+func toDomainCart(userID uuid.UUID, items []entities.CartItem) *entities.Cart {
+	var cartItems []entities.CartItem
+
+	cartItems = append(cartItems, items...)
+
+	return &entities.Cart{
+		UserID:     userID,
+		Items:      cartItems,
+		TotalItems: len(cartItems),
 	}
-
-	event := models.OrderCreatedEvent{
-		OrderID:     order.ID.String(),
-		UserID:      order.UserID.String(),
-		TotalAmount: order.TotalAmount,
-		OrderDate:   order.OrderDate,
-		ProductIDs:  productIDs,
-		Quantities:  quantities,
-	}
-
-	eventBytes, err := json.Marshal(event)
-	if err != nil {
-		log.Printf("Error marshaling OrderCreatedEvent: %v", err)
-		// Ini adalah error yang tidak menghentikan checkout, tetapi perlu dicatat
-		return fmt.Errorf("checkout successful but failed to publish event: %w", err)
-	}
-
-	// Publikasikan pesan ke RabbitMQ
-	err = s.rabbitmqClient.PublishMessage(eventBytes)
-	if err != nil {
-		log.Printf("Error publishing OrderCreatedEvent to RabbitMQ: %v", err)
-		// Ini juga error yang tidak menghentikan checkout utama, tapi perlu dicatat/ditangani lebih lanjut
-		return fmt.Errorf("checkout successful but failed to publish event: %w", err)
-	}
-
-	log.Printf("Order %s successfully checked out and event published to RabbitMQ.", order.ID)
-	return nil
 }

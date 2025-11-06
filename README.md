@@ -164,4 +164,4 @@ google drive user story
 
 ## References
 
-**folder pattern** : <https://github.com/restuwahyu13/go-clean-architecture>
+**folder pattern** : https://github.com/ProgrammerZamanNow/belajar-golang-redis-jwt-session.git

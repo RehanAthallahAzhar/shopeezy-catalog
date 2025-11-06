@@ -5,7 +5,7 @@ run:
 
 linters-settings:
   goimports:
-    local-prefixes: github.com/RehanAthallahAzhar/shopeezy-inventory-cart
+    local-prefixes: github.com/RehanAthallahAzhar/shopeezy-catalog
   gofmt:
     simplify: true
 

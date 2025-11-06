@@ -7,8 +7,8 @@ import (
 	"log"
 	"time"
 
-	"github.com/RehanAthallahAzhar/shopeezy-inventory-cart/internal/models"
-	_ "github.com/lib/pq" // PostgreSQL driver
+	"github.com/RehanAthallahAzhar/shopeezy-catalog/internal/models"
+	_ "github.com/lib/pq"
 )
 
 func Connect(ctx context.Context, credential *models.Credential) (*sql.DB, error) {

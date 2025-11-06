@@ -17,7 +17,6 @@ type ProductRequest struct {
 type ProductResponse struct {
 	ID          uuid.UUID `json:"id"`
 	SellerID    uuid.UUID `json:"seller_id"`
-	SellerName  string    `json:"seller_name"`
 	Name        string    `json:"name"`
 	Price       int       `json:"price"`
 	Stock       int       `json:"stock"`
@@ -31,7 +30,6 @@ type ProductResponse struct {
 type ProductWithSeller struct {
 	ID          uuid.UUID `json:"id"`
 	SellerID    uuid.UUID `json:"seller_id"`
-	SellerName  string    `json:"seller_name"`
 	Name        string    `json:"name"`
 	Price       int       `json:"price"`
 	Stock       int       `json:"stock"`

@@ -10,7 +10,6 @@ var (
 	ErrInternalServerError = errors.New("internal server error")
 
 	// product
-	ErrProductNotFound             = errors.New("product not found")
 	ErrInsufficientStock           = errors.New("insufficient stock for this quantity")
 	ErrInvalidUserInput            = errors.New("invalid user input")
 	ErrProductNotBelongToSeller    = errors.New("product does not belong to this seller")
@@ -23,8 +22,14 @@ var (
 	ErrCartRetrievalFail     = errors.New("failed to retrieve cart")
 	ErrCartEmpty             = errors.New("cart is empty")
 
+	// cache
+	MsgFailedToClearProductCaches = "failed to clear product cache"
+	MsgProductCacheCleared        = "product cache cleared"
+
 	//cart-item
 	ErrCartItemNotFound = errors.New("cart item not found")
+
+	ErrNotFound = errors.New("not found")
 
 	//order
 	ErrOrderNotFound = errors.New("order not found")

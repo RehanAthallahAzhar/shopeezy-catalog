@@ -7,9 +7,8 @@ type ErrorResponse struct {
 
 // SuccessResponse untuk response sukses standar (tanpa data)
 type SuccessResponse struct {
-	Username string      `json:"username"`
-	Message  string      `json:"message"`
-	Data     interface{} `json:"data"`
+	Message string      `json:"message"`
+	Data    interface{} `json:"data"`
 }
 
 // DataResponse untuk response sukses dengan data tunggal

@@ -2,9 +2,6 @@ package helpers
 
 import (
 	"github.com/google/uuid"
-	"github.com/labstack/echo/v4"
-
-	"github.com/RehanAthallahAzhar/shopeezy-inventory-cart/internal/pkg/errors"
 )
 
 /*
@@ -19,30 +16,7 @@ func GenerateNewID() uuid.UUID {
 	return uuid.New()
 }
 
-func isValidUUID(u string) bool {
+func IsValidUUID(u string) bool {
 	_, err := uuid.Parse(u)
 	return err == nil
-}
-
-func GetIDFromPathParam(c echo.Context, key string) (uuid.UUID, error) {
-	val := c.Param(key)
-	if val == "" || !isValidUUID(val) {
-		return uuid.Nil, errors.ErrInvalidRequestPayload
-	}
-
-	res, err := StringToUUID(val)
-	if err != nil {
-		return uuid.Nil, err
-	}
-
-	return res, nil
-}
-
-func GetFromPathParam(c echo.Context, key string) (string, error) {
-	val := c.Param(key)
-	if val == "" {
-		return "", errors.ErrInvalidRequestPayload
-	}
-
-	return val, nil
 }

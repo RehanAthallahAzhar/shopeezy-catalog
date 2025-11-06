@@ -1,20 +1,49 @@
 package handlers
 
 import (
-	"log"
 	"net/http"
 
-	"github.com/RehanAthallahAzhar/shopeezy-inventory-cart/internal/helpers"
-	"github.com/RehanAthallahAzhar/shopeezy-inventory-cart/internal/models"
-	"github.com/RehanAthallahAzhar/shopeezy-inventory-cart/internal/pkg/errors"
+	"github.com/RehanAthallahAzhar/shopeezy-catalog/internal/entities"
+	"github.com/RehanAthallahAzhar/shopeezy-catalog/internal/models"
+	"github.com/RehanAthallahAzhar/shopeezy-catalog/internal/pkg/errors"
+	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
+	"github.com/sirupsen/logrus"
 )
+
+func (a *API) AddToCart() echo.HandlerFunc {
+	return func(c echo.Context) error {
+		ctx := c.Request().Context()
+
+		userID, err := getUserIDFromContext(c)
+		if err != nil {
+			return respondError(c, http.StatusUnauthorized, errors.ErrInvalidUserSession)
+		}
+
+		productID, err := getIDFromPathParam(c, "product_id")
+		if err != nil {
+			return respondError(c, http.StatusBadRequest, err)
+		}
+
+		var req models.CartRequest
+		if err := c.Bind(&req); err != nil {
+			return respondError(c, http.StatusBadRequest, errors.ErrInvalidRequestPayload)
+		}
+
+		res, err := a.CartSvc.AddItemToCart(ctx, userID, productID, &req)
+		if err != nil {
+			return handleOperationError(c, err, MsgFailedToAddItemToCart)
+		}
+
+		return respondSuccess(c, http.StatusOK, MsgCartCreated, toCartItemResponse(*res))
+	}
+}
 
 func (a *API) GetCartItemsByUserID() echo.HandlerFunc {
 	return func(c echo.Context) error {
 		ctx := c.Request().Context()
 
-		userID, err := extractUserID(c)
+		userID, err := getUserIDFromContext(c)
 		if err != nil {
 			return respondError(c, http.StatusUnauthorized, errors.ErrInvalidUserSession)
 		}
@@ -24,134 +53,95 @@ func (a *API) GetCartItemsByUserID() echo.HandlerFunc {
 			return handleGetError(c, err)
 		}
 
-		return respondSuccess(c, http.StatusOK, MsgCartRetrieved, res)
+		return respondSuccess(c, http.StatusOK, MsgCartRetrieved, toCartResponse(res))
 	}
 }
 
-func (a *API) GetCartItemByProductID() echo.HandlerFunc {
+func (a *API) UpdateCartItem() echo.HandlerFunc {
 	return func(c echo.Context) error {
 		ctx := c.Request().Context()
 
-		userID, err := extractUserID(c)
+		userID, err := getUserIDFromContext(c)
 		if err != nil {
 			return respondError(c, http.StatusUnauthorized, errors.ErrInvalidUserSession)
 		}
 
-		productID, err := helpers.GetIDFromPathParam(c, "product_id")
+		productIDStr := c.Param("product_id")
+		productID, err := uuid.Parse(productIDStr)
+		if err != nil {
+			return c.JSON(http.StatusBadRequest, "Invalid Product ID format")
+		}
+
+		var req models.UpdateCartRequest
+		if err := c.Bind(&req); err != nil {
+			return c.JSON(http.StatusBadRequest, "Invalid request body: ‘quantity’ is required")
+		}
+
+		logger := a.log.WithFields(logrus.Fields{"user_id": userID, "product_id": productID, "new_quantity": req.Quantity})
+		logger.Info("Receiving UpdateCartItem requests")
+
+		err = a.CartSvc.UpdateItem(ctx, userID, productID, req.Quantity, req.Description)
+		if err != nil {
+			logger.WithError(err).Error("Error dari service saat memperbarui item keranjang")
+			return c.JSON(http.StatusInternalServerError, map[string]string{"message": err.Error()})
+		}
+
+		return respondSuccess(c, http.StatusOK, MsgCartUpdated, nil)
+	}
+}
+
+func (a *API) RemoveFromCart() echo.HandlerFunc {
+	return func(c echo.Context) error {
+		ctx := c.Request().Context()
+
+		userID, err := getUserIDFromContext(c)
+		if err != nil {
+			return respondError(c, http.StatusUnauthorized, errors.ErrInvalidUserSession)
+		}
+
+		productID, err := getIDFromPathParam(c, "product_id")
 		if err != nil {
 			return respondError(c, http.StatusBadRequest, err)
 		}
 
-		res, err := a.CartSvc.GetCartItemByProductID(ctx, userID, productID)
+		err = a.CartSvc.RemoveItemFromCart(ctx, userID, productID)
 		if err != nil {
-			return handleGetError(c, err)
+			return handleOperationError(c, err, MsgFailedToUpdateCart)
 		}
 
-		return respondSuccess(c, http.StatusOK, MsgCartRetrieved, res)
+		return respondSuccess(c, http.StatusOK, MsgCartDeleted, nil)
 	}
 }
 
-func (a *API) AddToCart(c echo.Context) error {
-	ctx := c.Request().Context()
+// ------- HELPER -------
 
-	userID, err := extractUserID(c)
-	if err != nil {
-		return respondError(c, http.StatusUnauthorized, errors.ErrInvalidUserSession)
+func toCartResponse(cart *entities.Cart) *models.CartResponse {
+	return &models.CartResponse{
+		UserID:     cart.UserID.String(),
+		TotalItems: cart.TotalItems,
+		Items:      toCartItemsResponse(cart.Items),
 	}
-
-	var req models.CartRequest
-	if err := c.Bind(&req); err != nil {
-		return respondError(c, http.StatusBadRequest, errors.ErrInvalidRequestPayload)
-	}
-
-	res, err := a.CartSvc.AddItemToCart(ctx, userID, &req)
-	if err != nil {
-		return handleOperationError(c, err, MsgFailedToAddItemToCart)
-	}
-
-	return respondSuccess(c, http.StatusOK, MsgCartCreated, res)
 }
 
-func (a *API) UpdateCartItemQuantity(c echo.Context) error {
-	ctx := c.Request().Context()
+func toCartItemsResponse(items []entities.CartItem) []models.CartItemResponse {
+	cartItemsResponse := make([]models.CartItemResponse, len(items))
 
-	userID, err := extractUserID(c)
-	if err != nil {
-		return respondError(c, http.StatusUnauthorized, errors.ErrInvalidUserSession)
+	for i, item := range items {
+		cartItemsResponse[i] = *toCartItemResponse(item)
 	}
 
-	productID, err := helpers.GetIDFromPathParam(c, "product_id")
-	if err != nil {
-		return respondError(c, http.StatusBadRequest, err)
-	}
-
-	var req models.UpdateCartRequest
-	if err := c.Bind(&req); err != nil {
-		return c.JSON(http.StatusBadRequest, errors.ErrInvalidRequestPayload)
-	}
-
-	res, err := a.CartSvc.UpdateItemQuantity(ctx, userID, productID, &req)
-	if err != nil {
-		return handleOperationError(c, err, MsgFailedToUpdateCart)
-	}
-
-	return respondSuccess(c, http.StatusOK, MsgCartUpdated, res)
+	return cartItemsResponse
 }
 
-func (a *API) RemoveFromCart(c echo.Context) error {
-	ctx := c.Request().Context()
-
-	userID, err := extractUserID(c)
-	if err != nil {
-		return respondError(c, http.StatusUnauthorized, errors.ErrInvalidUserSession)
+func toCartItemResponse(item entities.CartItem) *models.CartItemResponse {
+	return &models.CartItemResponse{
+		SellerName:   item.SellerName,
+		ProductID:    item.ProductID.String(),
+		ProductName:  item.ProductName,
+		ProductImage: "",
+		Price:        item.Price,
+		Quantity:     item.Quantity,
+		Description:  item.Description,
+		Checked:      item.Checked,
 	}
-
-	productID, err := helpers.GetIDFromPathParam(c, "product_id")
-	if err != nil {
-		return respondError(c, http.StatusBadRequest, err)
-	}
-
-	err = a.CartSvc.RemoveItemFromCart(ctx, userID, productID)
-	if err != nil {
-		return handleOperationError(c, err, MsgFailedToUpdateCart)
-	}
-
-	return respondSuccess(c, http.StatusOK, MsgCartDeleted, nil)
-}
-
-func (a *API) RestoreCart(c echo.Context) error {
-	ctx := c.Request().Context()
-
-	userID, err := extractUserID(c)
-	if err != nil {
-		return respondError(c, http.StatusUnauthorized, errors.ErrInvalidUserSession)
-	}
-
-	res, err := a.CartSvc.RestoreCartFromDB(ctx, userID)
-	if err != nil {
-		return handleOperationError(c, err, MsgFailedToRestoreCart)
-	}
-
-	return respondSuccess(c, http.StatusOK, "Cart restored successfully", res)
-}
-
-func (a *API) CheckoutCart(c echo.Context) error {
-	ctx := c.Request().Context()
-
-	userID, err := extractUserID(c)
-	if err != nil {
-		return respondError(c, http.StatusUnauthorized, errors.ErrInvalidUserSession)
-	}
-
-	err = a.CartSvc.CheckoutCart(ctx, userID)
-	if err != nil {
-		if err == errors.ErrCartNotFound {
-			return respondError(c, http.StatusNotFound, errors.ErrCartNotFound)
-		}
-
-		log.Printf("Error in CheckoutCart handler: %v", err)
-		return c.JSON(http.StatusInternalServerError, echo.Map{"message": "Failed to checkout cart"})
-	}
-
-	return respondSuccess(c, http.StatusOK, MsgCartCheckedOut, nil)
 }

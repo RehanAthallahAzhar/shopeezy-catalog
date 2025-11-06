@@ -11,39 +11,52 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 )
 
-const deleteProduct = `-- name: DeleteProduct :exec
-DELETE FROM products WHERE id = $1
+const deleteProduct = `-- name: DeleteProduct :one
+DELETE FROM products WHERE id = $1 
+RETURNING id, seller_id, name, price, stock, discount, type, description, created_at, updated_at, deleted_at
 `
 
-func (q *Queries) DeleteProduct(ctx context.Context, id uuid.UUID) error {
-	_, err := q.db.ExecContext(ctx, deleteProduct, id)
-	return err
+func (q *Queries) DeleteProduct(ctx context.Context, id uuid.UUID) (Product, error) {
+	row := q.db.QueryRowContext(ctx, deleteProduct, id)
+	var i Product
+	err := row.Scan(
+		&i.ID,
+		&i.SellerID,
+		&i.Name,
+		&i.Price,
+		&i.Stock,
+		&i.Discount,
+		&i.Type,
+		&i.Description,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.DeletedAt,
+	)
+	return i, err
 }
 
 const getAllProducts = `-- name: GetAllProducts :many
 SELECT 
-  products.id,
-  products.seller_id,
-  users.name as seller_name,
-  products.name,
-  products.price,
-  products.stock,
-  products.discount,
-  products.type,
-  products.description,
-  products.created_at,
-  products.updated_at
+  id,
+  seller_id,
+  "name",
+  price,
+  stock,
+  discount,
+  "type",
+  "description",
+  created_at,
+  updated_at
 FROM products
-LEFT JOIN users ON users.id = products.seller_id
-WHERE products.deleted_at IS NULL
+WHERE deleted_at IS NULL
 `
 
 type GetAllProductsRow struct {
 	ID          uuid.UUID
 	SellerID    uuid.UUID
-	SellerName  sql.NullString
 	Name        string
 	Price       int32
 	Stock       int32
@@ -66,7 +79,6 @@ func (q *Queries) GetAllProducts(ctx context.Context) ([]GetAllProductsRow, erro
 		if err := rows.Scan(
 			&i.ID,
 			&i.SellerID,
-			&i.SellerName,
 			&i.Name,
 			&i.Price,
 			&i.Stock,
@@ -91,26 +103,23 @@ func (q *Queries) GetAllProducts(ctx context.Context) ([]GetAllProductsRow, erro
 
 const getProductByID = `-- name: GetProductByID :one
 SELECT 
-  products.id,
-  products.seller_id,
-  users.name as seller_name,
-  products.name,
-  products.price,
-  products.stock,
-  products.discount,
-  products.type,
-  products.description,
-  products.created_at,
-  products.updated_at
+  id,
+  seller_id,
+  "name",
+  price,
+  stock,
+  discount,
+  "type",
+  "description",
+  created_at,
+  updated_at
 FROM products
-LEFT JOIN users ON users.id = products.seller_id
-WHERE products.id = $1 AND products.deleted_at IS NULL
+WHERE id = $1 AND deleted_at IS NULL
 `
 
 type GetProductByIDRow struct {
 	ID          uuid.UUID
 	SellerID    uuid.UUID
-	SellerName  sql.NullString
 	Name        string
 	Price       int32
 	Stock       int32
@@ -127,7 +136,6 @@ func (q *Queries) GetProductByID(ctx context.Context, id uuid.UUID) (GetProductB
 	err := row.Scan(
 		&i.ID,
 		&i.SellerID,
-		&i.SellerName,
 		&i.Name,
 		&i.Price,
 		&i.Stock,
@@ -138,6 +146,69 @@ func (q *Queries) GetProductByID(ctx context.Context, id uuid.UUID) (GetProductB
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const getProductByIDs = `-- name: GetProductByIDs :many
+SELECT 
+  id,
+  seller_id,
+  "name",
+  price,
+  stock,
+  discount,
+  "type",
+  "description",
+  created_at,
+  updated_at
+FROM products
+WHERE id = ANY($1::uuid[]) AND deleted_at IS NULL
+`
+
+type GetProductByIDsRow struct {
+	ID          uuid.UUID
+	SellerID    uuid.UUID
+	Name        string
+	Price       int32
+	Stock       int32
+	Discount    sql.NullInt32
+	Type        sql.NullString
+	Description sql.NullString
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+}
+
+func (q *Queries) GetProductByIDs(ctx context.Context, dollar_1 []uuid.UUID) ([]GetProductByIDsRow, error) {
+	rows, err := q.db.QueryContext(ctx, getProductByIDs, pq.Array(dollar_1))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetProductByIDsRow
+	for rows.Next() {
+		var i GetProductByIDsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.SellerID,
+			&i.Name,
+			&i.Price,
+			&i.Stock,
+			&i.Discount,
+			&i.Type,
+			&i.Description,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const getProductStock = `-- name: GetProductStock :one
@@ -153,26 +224,23 @@ func (q *Queries) GetProductStock(ctx context.Context, id uuid.UUID) (int32, err
 
 const getProductsByName = `-- name: GetProductsByName :many
 SELECT 
-  products.id,
-  products.seller_id,
-  users.name as seller_name,
-  products.name,
-  products.price,
-  products.stock,
-  products.discount,
-  products.type,
-  products.description,
-  products.created_at,
-  products.updated_at
+  id,
+  seller_id,
+  "name",
+  price,
+  stock,
+  discount,
+  "type",
+  "description",
+  created_at,
+  updated_at
 FROM products
-LEFT JOIN users ON users.id = products.seller_id
-WHERE products.name LIKE $1 AND products.deleted_at IS NULL
+WHERE name LIKE $1 AND deleted_at IS NULL
 `
 
 type GetProductsByNameRow struct {
 	ID          uuid.UUID
 	SellerID    uuid.UUID
-	SellerName  sql.NullString
 	Name        string
 	Price       int32
 	Stock       int32
@@ -195,7 +263,6 @@ func (q *Queries) GetProductsByName(ctx context.Context, name string) ([]GetProd
 		if err := rows.Scan(
 			&i.ID,
 			&i.SellerID,
-			&i.SellerName,
 			&i.Name,
 			&i.Price,
 			&i.Stock,
@@ -220,26 +287,23 @@ func (q *Queries) GetProductsByName(ctx context.Context, name string) ([]GetProd
 
 const getProductsBySellerID = `-- name: GetProductsBySellerID :many
 SELECT 
-  products.id,
-  products.seller_id,
-  users.name as seller_name,
-  products.name,
-  products.price,
-  products.stock,
-  products.discount,
-  products.type,
-  products.description,
-  products.created_at,
-  products.updated_at
+  id,
+  seller_id,
+  "name",
+  price,
+  stock,
+  discount,
+  "type",
+  "description",
+  created_at,
+  updated_at
 FROM products
-LEFT JOIN users ON users.id = products.seller_id
-WHERE products.seller_id = $1 AND products.deleted_at IS NULL
+WHERE seller_id = $1 AND deleted_at IS NULL
 `
 
 type GetProductsBySellerIDRow struct {
 	ID          uuid.UUID
 	SellerID    uuid.UUID
-	SellerName  sql.NullString
 	Name        string
 	Price       int32
 	Stock       int32
@@ -262,7 +326,6 @@ func (q *Queries) GetProductsBySellerID(ctx context.Context, sellerID uuid.UUID)
 		if err := rows.Scan(
 			&i.ID,
 			&i.SellerID,
-			&i.SellerName,
 			&i.Name,
 			&i.Price,
 			&i.Stock,
@@ -287,11 +350,19 @@ func (q *Queries) GetProductsBySellerID(ctx context.Context, sellerID uuid.UUID)
 
 const insertProduct = `-- name: InsertProduct :one
 INSERT INTO products (
-  id, seller_id, name, price, stock, discount, type, description, created_at, updated_at
+  id, 
+  seller_id, 
+  "name", 
+  price, 
+  stock, 
+  discount, 
+  "type", 
+  "description", 
+  created_at, 
+  updated_at
 ) VALUES (
   $1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW()
-)
-RETURNING id, seller_id, name, price, stock, discount, type, description, created_at, updated_at, deleted_at
+) RETURNING id, seller_id, name, price, stock, discount, type, description, created_at, updated_at, deleted_at
 `
 
 type InsertProductParams struct {
@@ -333,10 +404,11 @@ func (q *Queries) InsertProduct(ctx context.Context, arg InsertProductParams) (P
 	return i, err
 }
 
-const updateProduct = `-- name: UpdateProduct :exec
+const updateProduct = `-- name: UpdateProduct :one
 UPDATE products
 SET name = $2, price = $3, stock = $4, discount = $5, type = $6, description = $7, updated_at = NOW()
 WHERE id = $1 AND seller_id = $8
+RETURNING id, seller_id, name, price, stock, discount, type, description, created_at, updated_at, deleted_at
 `
 
 type UpdateProductParams struct {
@@ -350,8 +422,8 @@ type UpdateProductParams struct {
 	SellerID    uuid.UUID
 }
 
-func (q *Queries) UpdateProduct(ctx context.Context, arg UpdateProductParams) error {
-	_, err := q.db.ExecContext(ctx, updateProduct,
+func (q *Queries) UpdateProduct(ctx context.Context, arg UpdateProductParams) (Product, error) {
+	row := q.db.QueryRowContext(ctx, updateProduct,
 		arg.ID,
 		arg.Name,
 		arg.Price,
@@ -361,11 +433,26 @@ func (q *Queries) UpdateProduct(ctx context.Context, arg UpdateProductParams) er
 		arg.Description,
 		arg.SellerID,
 	)
-	return err
+	var i Product
+	err := row.Scan(
+		&i.ID,
+		&i.SellerID,
+		&i.Name,
+		&i.Price,
+		&i.Stock,
+		&i.Discount,
+		&i.Type,
+		&i.Description,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.DeletedAt,
+	)
+	return i, err
 }
 
-const updateProductStock = `-- name: UpdateProductStock :exec
-UPDATE products SET stock = $2 WHERE id = $1
+const updateProductStock = `-- name: UpdateProductStock :one
+UPDATE products SET stock = $2 WHERE id = $1 
+RETURNING id, seller_id, name, price, stock, discount, type, description, created_at, updated_at, deleted_at
 `
 
 type UpdateProductStockParams struct {
@@ -373,7 +460,21 @@ type UpdateProductStockParams struct {
 	Stock int32
 }
 
-func (q *Queries) UpdateProductStock(ctx context.Context, arg UpdateProductStockParams) error {
-	_, err := q.db.ExecContext(ctx, updateProductStock, arg.ID, arg.Stock)
-	return err
+func (q *Queries) UpdateProductStock(ctx context.Context, arg UpdateProductStockParams) (Product, error) {
+	row := q.db.QueryRowContext(ctx, updateProductStock, arg.ID, arg.Stock)
+	var i Product
+	err := row.Scan(
+		&i.ID,
+		&i.SellerID,
+		&i.Name,
+		&i.Price,
+		&i.Stock,
+		&i.Discount,
+		&i.Type,
+		&i.Description,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.DeletedAt,
+	)
+	return i, err
 }

@@ -3,6 +3,7 @@ package helpers
 import (
 	"database/sql"
 	"fmt"
+	"reflect"
 
 	"github.com/google/uuid"
 )
@@ -27,4 +28,30 @@ func StringToNullString(val string) sql.NullString {
 		String: val,
 		Valid:  true,
 	}
+}
+
+func ConvertNullInt32(v reflect.Value) int {
+	nullInt, ok := v.Interface().(sql.NullInt32)
+	if !ok {
+		return int(v.Interface().(int32))
+	}
+
+	if nullInt.Valid {
+		return int(nullInt.Int32)
+	}
+
+	return 0
+}
+
+func ConvertNullString(v reflect.Value) string {
+	nullInt, ok := v.Interface().(sql.NullString)
+	if !ok {
+		return v.Interface().(string)
+	}
+
+	if nullInt.Valid {
+		return nullInt.String
+	}
+
+	return ""
 }

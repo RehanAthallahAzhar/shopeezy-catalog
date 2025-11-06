@@ -21,24 +21,6 @@ type Cart struct {
 	UpdatedAt   time.Time
 }
 
-type Order struct {
-	ID          uuid.UUID
-	UserID      uuid.UUID
-	Status      string
-	OrderDate   time.Time
-	TotalAmount sql.NullInt32
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
-}
-
-type OrderItem struct {
-	ID        uuid.UUID
-	OrderID   uuid.UUID
-	ProductID uuid.UUID
-	Quantity  int32
-	Price     int32
-}
-
 type Product struct {
 	ID          uuid.UUID
 	SellerID    uuid.UUID

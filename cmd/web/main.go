@@ -2,44 +2,54 @@ package main
 
 import (
 	"context"
-	"log"
-	"os"
-	"strconv"
+	"fmt"
 	"time"
 
 	"github.com/go-playground/validator/v10"
-	"github.com/joho/godotenv"
+	"github.com/golang-migrate/migrate/v4"
 	"github.com/labstack/echo/v4"
+	"github.com/sirupsen/logrus"
+	"github.com/streadway/amqp"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 
-	"github.com/RehanAthallahAzhar/shopeezy-inventory-cart/db"
-	dbGenerated "github.com/RehanAthallahAzhar/shopeezy-inventory-cart/internal/db"
-	"github.com/RehanAthallahAzhar/shopeezy-inventory-cart/internal/delivery/http/routes"
-	"github.com/RehanAthallahAzhar/shopeezy-inventory-cart/internal/handlers"
-	"github.com/RehanAthallahAzhar/shopeezy-inventory-cart/internal/models"
-	"github.com/RehanAthallahAzhar/shopeezy-inventory-cart/internal/pkg/authclient"
-	"github.com/RehanAthallahAzhar/shopeezy-inventory-cart/internal/pkg/rabbitmq"
-	"github.com/RehanAthallahAzhar/shopeezy-inventory-cart/internal/pkg/redisclient"
-	"github.com/RehanAthallahAzhar/shopeezy-inventory-cart/internal/repositories"
-	"github.com/RehanAthallahAzhar/shopeezy-inventory-cart/internal/services"
+	_ "github.com/golang-migrate/migrate/v4/database/postgres"
+	_ "github.com/golang-migrate/migrate/v4/source/file"
+	_ "github.com/lib/pq"
+
+	"github.com/RehanAthallahAzhar/shopeezy-catalog/db"
+	"github.com/RehanAthallahAzhar/shopeezy-catalog/internal/configs"
+	dbGenerated "github.com/RehanAthallahAzhar/shopeezy-catalog/internal/db"
+	"github.com/RehanAthallahAzhar/shopeezy-catalog/internal/delivery/http/middlewares"
+	"github.com/RehanAthallahAzhar/shopeezy-catalog/internal/delivery/http/routes"
+	"github.com/RehanAthallahAzhar/shopeezy-catalog/internal/handlers"
+	"github.com/RehanAthallahAzhar/shopeezy-catalog/internal/models"
+	"github.com/RehanAthallahAzhar/shopeezy-catalog/internal/pkg/grpc/account"
+	"github.com/RehanAthallahAzhar/shopeezy-catalog/internal/pkg/logger"
+	"github.com/RehanAthallahAzhar/shopeezy-catalog/internal/pkg/redis"
+	"github.com/RehanAthallahAzhar/shopeezy-catalog/internal/repositories"
+	"github.com/RehanAthallahAzhar/shopeezy-catalog/internal/services"
+
+	accountpb "github.com/RehanAthallahAzhar/shopeezy-protos/pb/account"
+	authpb "github.com/RehanAthallahAzhar/shopeezy-protos/pb/auth"
 )
 
 func main() {
-	if err := godotenv.Load(); err != nil {
-		panic("Error loading .env file: " + err.Error())
+	log := logger.NewLogger()
+
+	cfg, err := configs.LoadConfig(log)
+	if err != nil {
+		log.Fatalf("FATAL: Gagal memuat konfigurasi: %v", err)
 	}
 
-	// DB credential from .env
-	port, err := strconv.Atoi(os.Getenv("DB_PORT"))
-	if err != nil {
-		log.Fatal("Invalid DB_PORT: ", err)
-	}
+	log.Printf(">>>> BUKTI PASSWORD YANG DIBACA: '%s'", cfg.Database.Password)
 
 	dbCredential := models.Credential{
-		Host:         os.Getenv("DB_HOST"),
-		Username:     os.Getenv("DB_USER"),
-		Password:     os.Getenv("DB_PASSWORD"),
-		DatabaseName: os.Getenv("DB_NAME"),
-		Port:         port,
+		Host:         cfg.Database.Host,
+		Username:     cfg.Database.User,
+		Password:     cfg.Database.Password,
+		DatabaseName: cfg.Database.Name,
+		Port:         cfg.Database.Port,
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -50,57 +60,105 @@ func main() {
 	if err != nil {
 		log.Fatalf("DB connection error: %v", err)
 	}
+
+	// Migrations
+	log.Println("Running database migrations...")
+
+	connectionString := fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=disable",
+		dbCredential.Username,
+		dbCredential.Password,
+		dbCredential.Host,
+		dbCredential.Port,
+		dbCredential.DatabaseName,
+	)
+
+	m, err := migrate.New(
+		"file://../../db/migrations", // Local Path
+		// "file://db/migrations", // Container Path
+		connectionString,
+	)
+	if err != nil {
+		log.Fatalf("Failed to create migrate instance: %v", err)
+	}
+
+	if err := m.Up(); err != nil && err != migrate.ErrNoChange {
+		log.Fatalf("Failed to run migrations: %v", err)
+	}
+
+	log.Println("Database migrations ran successfully.")
 	defer conn.Close()
 
 	// Init SQLC query
 	sqlcQueries := dbGenerated.New(conn)
 
 	// setup redis
-	redisClient, err := redisclient.NewRedisClient()
+	redisClient, err := redis.NewRedisClient()
 	if err != nil {
 		log.Fatalf("Gagal menginisialisasi klien Redis: %v", err)
 	}
 	defer redisClient.Close() // Pastikan koneksi Redis ditutup
 
-	// setup gRPC
-	accountGRPCServerAddress := os.Getenv("ACCOUNT_GRPC_SERVER_ADDRESS")
-	if accountGRPCServerAddress == "" {
-		accountGRPCServerAddress = "localhost:50051"
-	}
+	// gRPC Account & Auth
+	accountConn := createGrpcConnection(cfg.GRPC.AccountServiceAddress, log)
+	defer accountConn.Close()
 
-	authClient, err := authclient.NewAuthClient(accountGRPCServerAddress)
+	accountClient := accountpb.NewAccountServiceClient(accountConn)
+	authClient := authpb.NewAuthServiceClient(accountConn)
+	authClientWrapper := account.NewAuthClientFromService(authClient, accountConn)
+
+	// Publisher Rabbitmq
+	rabbitMQURL := cfg.RabbitMQ.URL
+	rabbitConn, err := amqp.Dial(rabbitMQURL)
 	if err != nil {
-		log.Fatalf("Gagal membuat klien gRPC Auth: %v", err)
+		log.Fatalf("Failed to connect to RabbitMQ: %v", err)
 	}
-	defer authClient.Close()
+	defer rabbitConn.Close()
 
-	// setup RabbitMQ
-	rabbitmqClient, err := rabbitmq.NewRabbitMQClient("order_created_queue") // Nama queue untuk event order
+	rabbitChannel, err := rabbitConn.Channel()
 	if err != nil {
-		log.Fatalf("Failed to initialize RabbitMQ client: %v", err)
+		log.Fatalf("Failed to open a channel: %v", err)
 	}
-	defer rabbitmqClient.Close() // Pastikan koneksi RabbitMQ ditutup
+	defer rabbitChannel.Close()
 
-	// setup repo
-	productsRepo := repositories.NewProductRepository(sqlcQueries, redisClient)
-	cartsRepo := repositories.NewCartRepository(sqlcQueries, conn, productsRepo, redisClient)
+	// // Buat instance publisher
+	// orderPublisher, err := messaging.NewRabbitMQPublisher(rabbitChannel)
+	// if err != nil {
+	// 	log.Fatalf("Gagal membuat order event publisher: %v", err)
+	// }
 
-	// setup service
+	// Depedency Ijection
+	productsRepo := repositories.NewProductRepository(sqlcQueries, log)
+	cartsRepo := repositories.NewCartRepository(redisClient, log)
+
 	validate := validator.New()
+	productService := services.NewProductService(productsRepo, redisClient, validate, log)
+	cartService := services.NewCartService(cartsRepo, productService, redisClient, accountClient, log)
 
-	// setup service
-	productService := services.NewProductService(productsRepo, validate)
-	cartService := services.NewCartService(cartsRepo, productsRepo, rabbitmqClient)
+	handler := handlers.NewHandler(productService, cartService, log)
+
+	// middleware
+	authMiddleware := middlewares.AuthMiddleware(authClientWrapper, log)
 
 	e := echo.New()
+
+	routes.InitRoutes(e, handler, authMiddleware)
 
 	// Middleware default
 	// e.Use(middleware.Logger())
 	// e.Use(middleware.Recover())
 
-	handler := handlers.NewHandler(authClient, productsRepo, cartsRepo, productService, cartService)
-	routes.InitRoutes(e, handler)
+	log.Printf("Server Echo for Inventory-Cart is listening on port %s", cfg.Server.Port)
+	e.Logger.Fatal(e.Start(":" + cfg.Server.Port))
+}
 
-	log.Printf("Server Echo Cashier App mendengarkan di port 1323")
-	e.Logger.Fatal(e.Start(":1323"))
+func createGrpcConnection(url string, log *logrus.Logger) *grpc.ClientConn {
+	// Gunakan grpc.Dial, yang modern dan non-blocking
+	conn, err := grpc.NewClient(url, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		// Gunakan Fatalf di sini karena jika koneksi gagal saat startup,
+		// aplikasi tidak bisa berjalan dengan benar.
+		log.Fatalf("Failed to connect to the gRPC service at %s: %v", url, err)
+	}
+	log.Printf("Connect to the gRPC Service at %s", url)
+	return conn
 }

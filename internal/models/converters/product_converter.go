@@ -3,7 +3,7 @@ package converters
 import (
 	"time"
 
-	"github.com/RehanAthallahAzhar/shopeezy-inventory-cart/internal/models"
+	"github.com/RehanAthallahAzhar/shopeezy-catalog/internal/models"
 )
 
 func MapToProductResponse(product *models.ProductWithSeller) *models.ProductResponse {
@@ -16,7 +16,6 @@ func MapToProductResponse(product *models.ProductWithSeller) *models.ProductResp
 		Type:        product.Type,
 		Description: product.Description,
 		SellerID:    product.SellerID,
-		SellerName:  product.SellerName,
 		CreatedAt:   product.CreatedAt.Format(time.RFC3339),
 		UpdatedAt:   product.UpdatedAt.Format(time.RFC3339),
 	}

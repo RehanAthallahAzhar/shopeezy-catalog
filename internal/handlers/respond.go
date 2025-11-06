@@ -6,8 +6,8 @@ import (
 	"log"
 	"net/http"
 
-	"github.com/RehanAthallahAzhar/shopeezy-inventory-cart/internal/models"
-	"github.com/RehanAthallahAzhar/shopeezy-inventory-cart/internal/pkg/errors"
+	"github.com/RehanAthallahAzhar/shopeezy-catalog/internal/models"
+	"github.com/RehanAthallahAzhar/shopeezy-catalog/internal/pkg/errors"
 	"github.com/labstack/echo/v4"
 )
 
@@ -51,10 +51,6 @@ func respondError(c echo.Context, status int, err error) error {
 
 func handleGetError(c echo.Context, err error) error {
 	switch {
-	case stdErrors.Is(err, errors.ErrProductNotFound),
-		stdErrors.Is(err, errors.ErrCartNotFound):
-		return respondError(c, http.StatusNotFound, err)
-
 	case stdErrors.Is(err, errors.ErrInvalidUserInput),
 		stdErrors.Is(err, errors.ErrInvalidCartOperation): // misalnya operasi cart yang tak sesuai
 		return respondError(c, http.StatusBadRequest, err)
@@ -74,10 +70,6 @@ func handleGetError(c echo.Context, err error) error {
 
 func handleOperationError(c echo.Context, err error, contextMsg string) error {
 	switch {
-	case stdErrors.Is(err, errors.ErrProductNotFound),
-		stdErrors.Is(err, errors.ErrCartNotFound):
-		return respondError(c, http.StatusNotFound, err)
-
 	case stdErrors.Is(err, errors.ErrProductNotBelongToSeller),
 		stdErrors.Is(err, errors.ErrInvalidUserInput),
 		stdErrors.Is(err, errors.ErrInvalidCartOperation):
