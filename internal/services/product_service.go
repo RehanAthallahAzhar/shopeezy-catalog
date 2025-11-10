@@ -21,6 +21,8 @@ import (
 	apperrors "github.com/RehanAthallahAzhar/shopeezy-catalog/internal/pkg/errors"
 	"github.com/RehanAthallahAzhar/shopeezy-catalog/internal/pkg/redis"
 	"github.com/RehanAthallahAzhar/shopeezy-catalog/internal/repositories"
+
+	productpb "github.com/RehanAthallahAzhar/shopeezy-protos/pb/product"
 )
 
 type ProductSource interface {
@@ -39,9 +41,11 @@ type ProductService interface {
 	GetProductsByName(ctx context.Context, name string) ([]entities.Product, error)
 	GetProductByID(ctx context.Context, id uuid.UUID) (*entities.Product, error)
 	GetProductByIDs(ctx context.Context, ids []uuid.UUID) ([]entities.Product, error)
-	UpdateProduct(ctx context.Context, req *models.ProductRequest, productID, sellerID uuid.UUID) (*entities.Product, error)
-	DeleteProduct(ctx context.Context, productID, sellerID uuid.UUID) (*entities.Product, error)
+	UpdateProduct(ctx context.Context, req *models.ProductRequest, productID, sellerID uuid.UUID, role string) (*entities.Product, error)
+	DeleteProduct(ctx context.Context, productID, sellerID uuid.UUID, role string) (*entities.Product, error)
 	ResetAllProductCaches(ctx context.Context) error
+	DecreaseStock(ctx context.Context, items []*productpb.StockItem) ([]*entities.Product, error)
+	IncreaseStock(ctx context.Context, items []*productpb.StockItem) ([]*entities.Product, error)
 }
 
 type productServiceImpl struct {
@@ -314,7 +318,7 @@ func (s *productServiceImpl) GetProductByIDs(ctx context.Context, ids []uuid.UUI
 
 	return finalProducts, nil
 }
-func (s *productServiceImpl) UpdateProduct(ctx context.Context, req *models.ProductRequest, productID, sellerID uuid.UUID) (*entities.Product, error) {
+func (s *productServiceImpl) UpdateProduct(ctx context.Context, req *models.ProductRequest, productID, sellerID uuid.UUID, role string) (*entities.Product, error) {
 	if err := s.validator.Struct(req); err != nil {
 		validationErrors := err.(validator.ValidationErrors)
 		var errorMessages []string
@@ -329,13 +333,13 @@ func (s *productServiceImpl) UpdateProduct(ctx context.Context, req *models.Prod
 		return nil, fmt.Errorf("service: failed to find product for update: %w", err)
 	}
 
-	if existingProduct.SellerID != sellerID {
+	if role != "admin" && existingProduct.SellerID != sellerID {
 		return nil, fmt.Errorf("service: product does not belong to this seller")
 	}
 
 	productParam := &db.UpdateProductParams{
 		ID:          productID,
-		SellerID:    sellerID,
+		SellerID:    existingProduct.SellerID,
 		Name:        req.Name,
 		Price:       int32(req.Price),
 		Stock:       int32(req.Stock),
@@ -356,14 +360,13 @@ func (s *productServiceImpl) UpdateProduct(ctx context.Context, req *models.Prod
 	return toDomainProduct(dbProduct), nil
 }
 
-func (s *productServiceImpl) DeleteProduct(ctx context.Context, productID, sellerID uuid.UUID) (*entities.Product, error) {
-	// Check if the product exists and belongs to the same seller
+func (s *productServiceImpl) DeleteProduct(ctx context.Context, productID, sellerID uuid.UUID, role string) (*entities.Product, error) {
 	existingProduct, err := s.productRepo.GetProductByID(ctx, productID)
 	if err != nil {
 		return nil, fmt.Errorf("service: failed to find product for deletion: %w", err)
 	}
 
-	if existingProduct.SellerID != sellerID {
+	if role != "admin" && existingProduct.SellerID != sellerID {
 		return nil, fmt.Errorf("service: product does not belong to this seller")
 	}
 
@@ -379,6 +382,66 @@ func (s *productServiceImpl) DeleteProduct(ctx context.Context, productID, selle
 	return toDomainProduct(dbPproduct), nil
 }
 
+func (s *productServiceImpl) DecreaseStock(ctx context.Context, items []*productpb.StockItem) ([]*entities.Product, error) {
+	tx, err := s.productRepo.BeginTx(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback() // Rollback
+
+	updatedProducts := make([]*entities.Product, 0, len(items))
+
+	for _, item := range items {
+		productID, _ := uuid.Parse(item.ProductId)
+
+		dbProduct, err := s.productRepo.DecreaseProductStock(ctx, tx, productID, item.QuantityToDecrease)
+		if err != nil {
+			return nil, fmt.Errorf("failed to process stock for product %s: %w", item.ProductId, err) // Rollback
+		}
+
+		updatedProducts = append(updatedProducts, toDomainProduct(dbProduct))
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("failed to commit stock update transaction: %w", err)
+	}
+
+	go s.InvalidateCachesAfterUpdate(ctx, updatedProducts)
+
+	return updatedProducts, nil
+}
+
+func (s *productServiceImpl) IncreaseStock(ctx context.Context, items []*productpb.StockItem) ([]*entities.Product, error) {
+	tx, err := s.productRepo.BeginTx(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	updatedProducts := make([]*entities.Product, 0, len(items))
+	for _, item := range items {
+		productID, _ := uuid.Parse(item.ProductId)
+		params := db.IncreaseProductStockParams{
+			ProductID:          productID,
+			QuantityToIncrease: item.QuantityToDecrease,
+		}
+
+		dbProduct, err := s.productRepo.IncreaseProductStock(ctx, tx, params)
+		if err != nil {
+			return nil, fmt.Errorf("failed to process stock increase for %s: %w", item.ProductId, err)
+		}
+		updatedProducts = append(updatedProducts, toDomainProduct(&dbProduct))
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
+	go s.InvalidateCachesAfterUpdate(ctx, updatedProducts)
+	return updatedProducts, nil
+}
+
+// ------- HELPERS -------
 func toDomainProduct[T ProductSource](dbProduct *T) *entities.Product {
 	v := reflect.ValueOf(dbProduct)
 	if v.Kind() == reflect.Ptr {
@@ -467,4 +530,23 @@ func (s *productServiceImpl) ResetAllProductCaches(ctx context.Context) error {
 
 	s.log.Infof("Successfully reset %d individual product caches and the main list cache.", keysFound)
 	return nil
+}
+
+func (s *productServiceImpl) InvalidateCachesAfterUpdate(ctx context.Context, updatedProducts []*entities.Product) {
+	s.log.Info("Invalidating product caches after stock update...")
+
+	keysToDel := []string{"all_products"}
+
+	for _, p := range updatedProducts {
+		keysToDel = append(keysToDel, fmt.Sprintf("product:%s", p.ID.String()))
+	}
+
+	cacheCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := s.redisClient.Client.Del(cacheCtx, keysToDel...).Err(); err != nil {
+		s.log.Warnf("Failed to invalidate product caches: %v", err)
+	} else {
+		s.log.Infof("Successfully invalidated %d cache keys.", len(keysToDel))
+	}
 }

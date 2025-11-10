@@ -2,52 +2,49 @@ package grpc
 
 import (
 	"context"
+	"errors"
 
-	// Import package pb dari repo protos Anda
-	product "github.com/RehanAthallahAzhar/shopeezy-protos/pb/product"
 	"github.com/google/uuid"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	// Import repository produk Anda
+	apperrors "github.com/RehanAthallahAzhar/shopeezy-catalog/internal/pkg/errors"
+	"github.com/RehanAthallahAzhar/shopeezy-catalog/internal/services"
 
-	"github.com/RehanAthallahAzhar/shopeezy-catalog/internal/repositories"
+	productpb "github.com/RehanAthallahAzhar/shopeezy-protos/pb/product"
 )
 
-// Server struct akan mengimplementasikan interface gRPC Server.
-// Ia membutuhkan akses ke repository untuk mengambil data dari database.
 type ProductServer struct {
-	product.UnimplementedProductServiceServer // Wajib untuk forward compatibility
-	ProductRepo                               repositories.ProductRepository
+	productpb.UnimplementedProductServiceServer
+	ProductSvc services.ProductService
 }
 
-// NewProductServer adalah constructor untuk server.
-func NewProductServer(productRepo repositories.ProductRepository) *ProductServer {
+func NewProductServer(productSvc services.ProductService) *ProductServer {
 	return &ProductServer{
-		ProductRepo: productRepo,
+		ProductSvc: productSvc,
 	}
 }
 
-func (s *ProductServer) GetProducts(ctx context.Context, req *product.GetProductsRequest) (*product.GetProductsResponse, error) {
+func (s *ProductServer) GetProducts(ctx context.Context, req *productpb.GetProductsRequest) (*productpb.GetProductsResponse, error) {
 	ids := make([]uuid.UUID, 0, len(req.GetIds()))
 
 	for _, idStr := range req.GetIds() {
 		parsedID, err := uuid.Parse(idStr)
 		if err != nil {
-			return nil, status.Errorf(codes.InvalidArgument, "Format Product ID '%s' tidak valid", idStr)
+			return nil, status.Errorf(codes.InvalidArgument, "format Product ID '%s' tidak valid", idStr)
 		}
 		ids = append(ids, parsedID)
 	}
 
-	dbProducts, err := s.ProductRepo.GetProductByIDs(ctx, ids)
+	dbProducts, err := s.ProductSvc.GetProductByIDs(ctx, ids)
 	if err != nil {
 		return nil, err
 	}
 
-	var protoProducts []*product.Product
+	var protoProducts []*productpb.Product
 	for _, p := range dbProducts {
-		protoProducts = append(protoProducts, &product.Product{
+		protoProducts = append(protoProducts, &productpb.Product{
 			Id:        p.ID.String(),
 			SellerId:  p.SellerID.String(),
 			Name:      p.Name,
@@ -58,5 +55,58 @@ func (s *ProductServer) GetProducts(ctx context.Context, req *product.GetProduct
 		})
 	}
 
-	return &product.GetProductsResponse{Products: protoProducts}, nil
+	return &productpb.GetProductsResponse{Products: protoProducts}, nil
+}
+
+func (s *ProductServer) DecreaseStock(ctx context.Context, req *productpb.DecreaseStockRequest) (*productpb.DecreaseStockResponse, error) {
+	updatedProducts, err := s.ProductSvc.DecreaseStock(ctx, req.GetItems())
+	if err != nil {
+		if errors.Is(err, apperrors.ErrProductOutOfStock) {
+			return nil, status.Errorf(codes.FailedPrecondition, "product out of stock: %v", err.Error())
+		}
+		return nil, status.Errorf(codes.Internal, "failed to decrease stock: %v", err)
+	}
+
+	pbProducts := make([]*productpb.Product, len(updatedProducts))
+	for i, p := range updatedProducts {
+		pbProducts[i] = &productpb.Product{
+			Id:          p.ID.String(),
+			SellerId:    p.SellerID.String(),
+			Name:        p.Name,
+			Price:       int32(p.Price),
+			Stock:       int32(p.Stock),
+			Description: p.Description,
+			CreatedAt:   timestamppb.New(p.CreatedAt),
+			UpdatedAt:   timestamppb.New(p.UpdatedAt),
+		}
+	}
+
+	return &productpb.DecreaseStockResponse{
+		Products: pbProducts,
+	}, nil
+}
+
+func (s *ProductServer) IncreaseStock(ctx context.Context, req *productpb.IncreaseStockRequest) (*productpb.IncreaseStockResponse, error) {
+	updatedProducts, err := s.ProductSvc.IncreaseStock(ctx, req.GetItems())
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to increase stock: %v", err)
+	}
+
+	pbProducts := make([]*productpb.Product, len(updatedProducts))
+	for i, p := range updatedProducts {
+		pbProducts[i] = &productpb.Product{
+			Id:          p.ID.String(),
+			SellerId:    p.SellerID.String(),
+			Name:        p.Name,
+			Price:       int32(p.Price),
+			Stock:       int32(p.Stock),
+			Description: p.Description,
+			CreatedAt:   timestamppb.New(p.CreatedAt),
+			UpdatedAt:   timestamppb.New(p.UpdatedAt),
+		}
+	}
+
+	return &productpb.IncreaseStockResponse{
+		Products: pbProducts,
+	}, nil
 }

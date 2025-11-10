@@ -1,13 +1,13 @@
 package handlers
 
 import (
-	stdErrors "errors"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
 
 	"github.com/RehanAthallahAzhar/shopeezy-catalog/internal/models"
-	"github.com/RehanAthallahAzhar/shopeezy-catalog/internal/pkg/errors"
+	apperrors "github.com/RehanAthallahAzhar/shopeezy-catalog/internal/pkg/errors"
 	"github.com/labstack/echo/v4"
 )
 
@@ -51,37 +51,37 @@ func respondError(c echo.Context, status int, err error) error {
 
 func handleGetError(c echo.Context, err error) error {
 	switch {
-	case stdErrors.Is(err, errors.ErrInvalidUserInput),
-		stdErrors.Is(err, errors.ErrInvalidCartOperation): // misalnya operasi cart yang tak sesuai
+	case errors.Is(err, apperrors.ErrInvalidUserInput),
+		errors.Is(err, apperrors.ErrInvalidCartOperation): // misalnya operasi cart yang tak sesuai
 		return respondError(c, http.StatusBadRequest, err)
 
-	case stdErrors.Is(err, errors.ErrInsufficientStock),
-		stdErrors.Is(err, errors.ErrCartAlreadyCheckedOut):
+	case errors.Is(err, apperrors.ErrInsufficientStock),
+		errors.Is(err, apperrors.ErrCartAlreadyCheckedOut):
 		return respondError(c, http.StatusForbidden, err)
 
-	case stdErrors.Is(err, errors.ErrInternalServerError):
+	case errors.Is(err, apperrors.ErrInternalServerError):
 		return respondError(c, http.StatusInternalServerError, err)
 
 	default:
 		log.Printf("Unhandled inventory error: %v", err)
-		return respondError(c, http.StatusInternalServerError, fmt.Errorf("%w: %s", errors.ErrInternalServerError, err))
+		return respondError(c, http.StatusInternalServerError, fmt.Errorf("%w: %s", apperrors.ErrInternalServerError, err))
 	}
 }
 
-func handleOperationError(c echo.Context, err error, contextMsg string) error {
+func handleOperationError(c echo.Context, err error) error {
 	switch {
-	case stdErrors.Is(err, errors.ErrProductNotBelongToSeller),
-		stdErrors.Is(err, errors.ErrInvalidUserInput),
-		stdErrors.Is(err, errors.ErrInvalidCartOperation):
+	case errors.Is(err, apperrors.ErrProductNotBelongToSeller),
+		errors.Is(err, apperrors.ErrInvalidUserInput),
+		errors.Is(err, apperrors.ErrInvalidCartOperation):
 		return respondError(c, http.StatusForbidden, err)
 
-	case err.Error() == errors.ErrInvalidProductUpdatePayload.Error(),
-		stdErrors.Is(err, errors.ErrInsufficientStock),
-		stdErrors.Is(err, errors.ErrCartAlreadyCheckedOut):
-		return respondError(c, http.StatusBadRequest, errors.ErrInvalidRequestPayload)
+	case err.Error() == apperrors.ErrInvalidProductUpdatePayload.Error(),
+		errors.Is(err, apperrors.ErrInsufficientStock),
+		errors.Is(err, apperrors.ErrCartAlreadyCheckedOut):
+		return respondError(c, http.StatusBadRequest, apperrors.ErrInvalidRequestPayload)
 
 	default:
-		c.Logger().Errorf("%s: %v", contextMsg, err)
+		c.Logger().Errorf("%s: %v", apperrors.ErrInternalServerError, err)
 		return respondError(c, http.StatusInternalServerError, fmt.Errorf("internal server error"))
 	}
 }

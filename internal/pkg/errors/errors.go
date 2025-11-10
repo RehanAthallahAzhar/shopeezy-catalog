@@ -14,6 +14,7 @@ var (
 	ErrInvalidUserInput            = errors.New("invalid user input")
 	ErrProductNotBelongToSeller    = errors.New("product does not belong to this seller")
 	ErrInvalidProductUpdatePayload = errors.New("all required columns must not be empty and valid for update")
+	ErrProductOutOfStock           = errors.New("product out of stock")
 
 	//cart
 	ErrCartNotFound          = errors.New("cart item not found")

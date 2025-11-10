@@ -8,7 +8,7 @@ import (
 	"github.com/RehanAthallahAzhar/shopeezy-catalog/internal/entities"
 	"github.com/RehanAthallahAzhar/shopeezy-catalog/internal/helpers"
 	"github.com/RehanAthallahAzhar/shopeezy-catalog/internal/models"
-	"github.com/RehanAthallahAzhar/shopeezy-catalog/internal/pkg/errors"
+	apperrors "github.com/RehanAthallahAzhar/shopeezy-catalog/internal/pkg/errors"
 )
 
 func (api *API) CreateProduct() echo.HandlerFunc {
@@ -18,17 +18,17 @@ func (api *API) CreateProduct() echo.HandlerFunc {
 
 		userID, err := getUserIDFromContext(c)
 		if err != nil {
-			return respondError(c, http.StatusUnauthorized, errors.ErrInvalidUserSession)
+			return respondError(c, http.StatusUnauthorized, apperrors.ErrInvalidUserSession)
 		}
 
 		var req models.ProductRequest
 		if err := c.Bind(&req); err != nil {
-			return respondError(c, http.StatusBadRequest, errors.ErrInvalidRequestPayload)
+			return respondError(c, http.StatusBadRequest, apperrors.ErrInvalidRequestPayload)
 		}
 
 		res, err := api.ProductSvc.CreateProduct(ctx, userID, &req)
 		if err != nil {
-			return handleOperationError(c, err, MsgFailedToCreateProduct)
+			return handleOperationError(c, err)
 		}
 
 		return respondSuccess(c, http.StatusCreated, MsgProductCreated, toProductResponse(res))
@@ -113,7 +113,12 @@ func (api *API) UpdateProduct() echo.HandlerFunc {
 
 		userID, err := getUserIDFromContext(c)
 		if err != nil {
-			return respondError(c, http.StatusUnauthorized, errors.ErrInvalidUserSession)
+			return respondError(c, http.StatusUnauthorized, apperrors.ErrInvalidUserSession)
+		}
+
+		role, err := getRoleFromContext(c)
+		if err != nil {
+			return respondError(c, http.StatusUnauthorized, apperrors.ErrInvalidUserSession)
 		}
 
 		productID, err := getIDFromPathParam(c, "product_id")
@@ -123,12 +128,12 @@ func (api *API) UpdateProduct() echo.HandlerFunc {
 
 		var productData models.ProductRequest
 		if err := c.Bind(&productData); err != nil {
-			return respondError(c, http.StatusBadRequest, errors.ErrInvalidRequestPayload)
+			return respondError(c, http.StatusBadRequest, apperrors.ErrInvalidRequestPayload)
 		}
 
-		res, err := api.ProductSvc.UpdateProduct(ctx, &productData, productID, userID)
+		res, err := api.ProductSvc.UpdateProduct(ctx, &productData, productID, userID, role)
 		if err != nil {
-			return handleOperationError(c, err, MsgFailedToUpdateProduct)
+			return handleOperationError(c, err)
 		}
 
 		return respondSuccess(c, http.StatusOK, MsgProductUpdated, toProductResponse(res))
@@ -143,7 +148,12 @@ func (api *API) DeleteProduct() echo.HandlerFunc {
 
 		sellerID, err := getUserIDFromContext(c)
 		if err != nil {
-			return respondError(c, http.StatusUnauthorized, errors.ErrInvalidUserSession)
+			return respondError(c, http.StatusUnauthorized, apperrors.ErrInvalidUserSession)
+		}
+
+		role, err := getRoleFromContext(c)
+		if err != nil {
+			return respondError(c, http.StatusUnauthorized, apperrors.ErrInvalidUserSession)
 		}
 
 		productID, err := getIDFromPathParam(c, "product_id")
@@ -151,9 +161,9 @@ func (api *API) DeleteProduct() echo.HandlerFunc {
 			return respondError(c, http.StatusBadRequest, err)
 		}
 
-		res, err := api.ProductSvc.DeleteProduct(ctx, productID, sellerID)
+		res, err := api.ProductSvc.DeleteProduct(ctx, productID, sellerID, role)
 		if err != nil {
-			return handleOperationError(c, err, MsgFailedToDeleteProduct)
+			return handleOperationError(c, err)
 		}
 
 		return respondSuccess(c, http.StatusOK, MsgProductDeleted, toProductResponse(res))
@@ -167,10 +177,10 @@ func (api *API) ClearProductCaches() echo.HandlerFunc {
 
 		err := api.ProductSvc.ResetAllProductCaches(ctx)
 		if err != nil {
-			return handleOperationError(c, err, errors.MsgFailedToClearProductCaches)
+			return handleOperationError(c, err)
 		}
 
-		return respondSuccess(c, http.StatusOK, errors.MsgProductCacheCleared, nil)
+		return respondSuccess(c, http.StatusOK, apperrors.MsgProductCacheCleared, nil)
 	}
 }
 

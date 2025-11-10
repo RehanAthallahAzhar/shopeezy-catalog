@@ -14,6 +14,40 @@ import (
 	"github.com/lib/pq"
 )
 
+const decreaseProductStock = `-- name: DecreaseProductStock :one
+UPDATE products
+SET
+    stock = stock - $1 -- Mengurangi stok secara atomik
+WHERE
+    id = $2
+    AND stock >= $1 -- Penjaga anti-overselling
+RETURNING id, seller_id, name, price, stock, discount, type, description, created_at, updated_at, deleted_at
+`
+
+type DecreaseProductStockParams struct {
+	Quantity  int32
+	ProductID uuid.UUID
+}
+
+func (q *Queries) DecreaseProductStock(ctx context.Context, arg DecreaseProductStockParams) (Product, error) {
+	row := q.db.QueryRowContext(ctx, decreaseProductStock, arg.Quantity, arg.ProductID)
+	var i Product
+	err := row.Scan(
+		&i.ID,
+		&i.SellerID,
+		&i.Name,
+		&i.Price,
+		&i.Stock,
+		&i.Discount,
+		&i.Type,
+		&i.Description,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.DeletedAt,
+	)
+	return i, err
+}
+
 const deleteProduct = `-- name: DeleteProduct :one
 DELETE FROM products WHERE id = $1 
 RETURNING id, seller_id, name, price, stock, discount, type, description, created_at, updated_at, deleted_at
@@ -346,6 +380,39 @@ func (q *Queries) GetProductsBySellerID(ctx context.Context, sellerID uuid.UUID)
 		return nil, err
 	}
 	return items, nil
+}
+
+const increaseProductStock = `-- name: IncreaseProductStock :one
+UPDATE products
+SET
+    stock = stock + $1
+WHERE
+    id = $2
+RETURNING id, seller_id, name, price, stock, discount, type, description, created_at, updated_at, deleted_at
+`
+
+type IncreaseProductStockParams struct {
+	QuantityToIncrease int32
+	ProductID          uuid.UUID
+}
+
+func (q *Queries) IncreaseProductStock(ctx context.Context, arg IncreaseProductStockParams) (Product, error) {
+	row := q.db.QueryRowContext(ctx, increaseProductStock, arg.QuantityToIncrease, arg.ProductID)
+	var i Product
+	err := row.Scan(
+		&i.ID,
+		&i.SellerID,
+		&i.Name,
+		&i.Price,
+		&i.Stock,
+		&i.Discount,
+		&i.Type,
+		&i.Description,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.DeletedAt,
+	)
+	return i, err
 }
 
 const insertProduct = `-- name: InsertProduct :one

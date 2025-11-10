@@ -30,12 +30,11 @@ func (a *API) AddToCart() echo.HandlerFunc {
 			return respondError(c, http.StatusBadRequest, errors.ErrInvalidRequestPayload)
 		}
 
-		res, err := a.CartSvc.AddItemToCart(ctx, userID, productID, &req)
-		if err != nil {
-			return handleOperationError(c, err, MsgFailedToAddItemToCart)
+		if err := a.CartSvc.AddItemToCart(ctx, userID, productID, &req); err != nil {
+			return handleOperationError(c, err)
 		}
 
-		return respondSuccess(c, http.StatusOK, MsgCartCreated, toCartItemResponse(*res))
+		return respondSuccess(c, http.StatusOK, MsgCartCreated, nil)
 	}
 }
 
@@ -106,7 +105,7 @@ func (a *API) RemoveFromCart() echo.HandlerFunc {
 
 		err = a.CartSvc.RemoveItemFromCart(ctx, userID, productID)
 		if err != nil {
-			return handleOperationError(c, err, MsgFailedToUpdateCart)
+			return handleOperationError(c, err)
 		}
 
 		return respondSuccess(c, http.StatusOK, MsgCartDeleted, nil)

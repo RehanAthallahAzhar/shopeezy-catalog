@@ -48,6 +48,16 @@ func getUserIDFromContext(c echo.Context) (uuid.UUID, error) {
 	return uuid.Nil, errors.ErrInvalidUserSession
 }
 
+func getRoleFromContext(c echo.Context) (string, error) {
+	if val := c.Get("role"); val != nil {
+		if role, ok := val.(string); ok {
+			return role, nil
+		}
+	}
+
+	return "", errors.ErrInvalidUserSession
+}
+
 func getIDFromPathParam(c echo.Context, key string) (uuid.UUID, error) {
 	val := c.Param(key)
 	if val == "" || !helpers.IsValidUUID(val) {

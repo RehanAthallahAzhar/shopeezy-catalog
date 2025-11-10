@@ -7,11 +7,12 @@ import (
 )
 
 type AppConfig struct {
-	Database DatabaseConfig
-	Redis    RedisConfig
-	GRPC     GrpcConfig
-	Server   ServerConfig
-	RabbitMQ struct {
+	Database  DatabaseConfig
+	Migration MigrationConfig
+	Redis     RedisConfig
+	GRPC      GrpcConfig
+	Server    ServerConfig
+	RabbitMQ  struct {
 		URL string `env:"RABBITMQ_URL,required"`
 	}
 }

@@ -11,16 +11,6 @@ import (
 	"github.com/google/uuid"
 )
 
-type Cart struct {
-	ID          uuid.UUID
-	UserID      uuid.UUID
-	ProductID   uuid.UUID
-	Quantity    int32
-	Description sql.NullString
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
-}
-
 type Product struct {
 	ID          uuid.UUID
 	SellerID    uuid.UUID

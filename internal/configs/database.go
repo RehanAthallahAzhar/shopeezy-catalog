@@ -8,3 +8,7 @@ type DatabaseConfig struct {
 	Port     int    `env:"DB_PORT,required"`
 	SslMode  string `env:"DB_SSL_MODE,required"`
 }
+
+type MigrationConfig struct {
+	Path string `env:"MIGRATION_PATH,required"`
+}

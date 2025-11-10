@@ -105,3 +105,20 @@ SELECT stock FROM products WHERE id = $1;
 -- name: UpdateProductStock :one
 UPDATE products SET stock = $2 WHERE id = $1 
 RETURNING *;
+
+-- name: DecreaseProductStock :one
+UPDATE products
+SET
+    stock = stock - sqlc.arg(quantity) -- Mengurangi stok secara atomik
+WHERE
+    id = sqlc.arg(product_id)
+    AND stock >= sqlc.arg(quantity) -- Penjaga anti-overselling
+RETURNING *; 
+
+-- name: IncreaseProductStock :one
+UPDATE products
+SET
+    stock = stock + sqlc.arg(quantity_to_increase)
+WHERE
+    id = sqlc.arg(product_id)
+RETURNING *;

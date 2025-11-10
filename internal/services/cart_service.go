@@ -22,7 +22,7 @@ type CartSource interface {
 }
 
 type CartService interface {
-	AddItemToCart(ctx context.Context, userID, productID uuid.UUID, req *models.CartRequest) (*entities.CartItem, error)
+	AddItemToCart(ctx context.Context, userID, productID uuid.UUID, req *models.CartRequest) error
 	GetCartItemsByUserID(ctx context.Context, userID uuid.UUID) (*entities.Cart, error)
 	UpdateItem(ctx context.Context, userID, productID uuid.UUID, newQuantity int, newDescription string) error
 	RemoveItemFromCart(ctx context.Context, userID, productID uuid.UUID) error
@@ -52,7 +52,7 @@ func NewCartService(
 	}
 }
 
-func (s *cartServiceImpl) AddItemToCart(ctx context.Context, userID, productID uuid.UUID, req *models.CartRequest) (*entities.CartItem, error) {
+func (s *cartServiceImpl) AddItemToCart(ctx context.Context, userID, productID uuid.UUID, req *models.CartRequest) error {
 	logger := s.log.WithFields(logrus.Fields{
 		"user_id":    userID,
 		"product_id": productID,
@@ -61,25 +61,7 @@ func (s *cartServiceImpl) AddItemToCart(ctx context.Context, userID, productID u
 	logger.Info("Starting the process of adding items to the cart")
 
 	if req.Quantity <= 0 {
-		return nil, fmt.Errorf("the quantity must be greater than 0")
-	}
-
-	// product
-	productsResponse, err := s.productSvc.GetProductByID(ctx, productID)
-	if err != nil {
-		logger.WithError(err).Warn("Product not found or Product Service error")
-		return nil, fmt.Errorf("invalid or not found product")
-	}
-
-	// account
-	accountDetail, err := s.fetchAccountDetail(ctx, productsResponse.SellerID.String())
-	if err != nil {
-		return nil, err
-	}
-
-	if productsResponse.Stock < req.Quantity {
-		logger.WithError(err).Warn("Product not found or Product Service error")
-		return nil, fmt.Errorf("insufficient stock")
+		return fmt.Errorf("the quantity must be greater than 0")
 	}
 
 	item := models.RedisCartItem{
@@ -91,12 +73,12 @@ func (s *cartServiceImpl) AddItemToCart(ctx context.Context, userID, productID u
 
 	if err := s.cartRepo.AddItem(ctx, userID, productID, item); err != nil {
 		logger.WithError(err).Error("Gagal saat memanggil repository untuk menambah item")
-		return nil, err
+		return err
 	}
 
 	logger.Info("Item successfully added to cart")
 
-	return toDomainCartItem(productID, item, productsResponse, accountDetail.Name), nil
+	return nil
 }
 
 func (s *cartServiceImpl) GetCartItemsByUserID(ctx context.Context, userID uuid.UUID) (*entities.Cart, error) {
@@ -164,9 +146,14 @@ func (s *cartServiceImpl) GetCartItemsByUserID(ctx context.Context, userID uuid.
 			logger.WithField("product_id", productIDStr).Warn("Detail produk tidak ditemukan, item dilewati.")
 			continue
 		}
+		accountDetail, ok := accountDetailMap[productDetail.SellerID.String()]
+		if !ok {
+			logger.WithField("seller_id", productDetail.SellerID.String()).Warn("Detail penjual tidak ditemukan, item dilewati.")
+			continue
+		}
 
 		productID, _ := uuid.Parse(productIDStr)
-		sellerName := accountDetailMap[productDetail.SellerID.String()].Name
+		sellerName := accountDetail.Name
 
 		assembledItem := toDomainCartItem(productID, redisItem, productDetail, sellerName)
 		finalItems = append(finalItems, *assembledItem)
