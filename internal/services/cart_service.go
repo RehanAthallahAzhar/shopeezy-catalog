@@ -181,10 +181,6 @@ func (s *cartServiceImpl) UpdateItem(ctx context.Context, userID, productID uuid
 		return fmt.Errorf("kuantitas tidak boleh negatif")
 	}
 
-	if newDescription == "" {
-		return fmt.Errorf("the description cannot be empty")
-	}
-
 	logger.Info("Call Product Service for stock validation")
 
 	productsSvc, err := s.productSvc.GetProductByID(ctx, productID)
@@ -195,7 +191,7 @@ func (s *cartServiceImpl) UpdateItem(ctx context.Context, userID, productID uuid
 
 	if int(productsSvc.Stock) < newQuantity {
 		logger.Warnf("Stock is insufficient. Requested: %d, Available: %d", newQuantity, productsSvc.Stock)
-		return fmt.Errorf("insufficient stock for product '%s'", productsSvc.Name) // Ganti dengan apperrors
+		return fmt.Errorf("insufficient stock for product '%s'", productsSvc.Name)
 	}
 
 	return s.cartRepo.UpdateItem(ctx, userID, productID, newQuantity, newDescription)
@@ -249,7 +245,7 @@ func toDomainCartItem(
 	return &entities.CartItem{
 		ProductID:       productID,
 		ProductName:     productDetail.Name,
-		ProductImageURL: "", // Anda bisa tambahkan ini dari productDetail nanti
+		ProductImageURL: "",
 		Price:           float64(productDetail.Price),
 		Stock:           int(productDetail.Stock),
 		SellerID:        productDetail.SellerID,

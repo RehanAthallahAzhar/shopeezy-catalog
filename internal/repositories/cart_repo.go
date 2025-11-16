@@ -101,14 +101,12 @@ func (r *cartRepositoryRedis) UpdateItem(ctx context.Context, userID, productID 
 	item.Description = newDescription
 	item.UpdatedAt = time.Now()
 
-	// Marshal kembali ke JSON
 	updatedItemJSON, err := json.Marshal(item)
 	if err != nil {
 		logger.WithError(err).Error("Failed to marshal updated basket items")
 		return fmt.Errorf("failed to process item update: %w", err)
 	}
 
-	// 3. WRITE: Simpan kembali data yang sudah diubah ke Redis.
 	if err := r.redisClient.Client.HSet(ctx, cartKey, productIDStr, updatedItemJSON).Err(); err != nil {
 		logger.WithError(err).Error("Failed to update HSET item to Redis")
 		return fmt.Errorf("failed to save updates to the cart: %w", err)

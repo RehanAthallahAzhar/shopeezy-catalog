@@ -9,14 +9,12 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-// API struct untuk mengelola handler dan dependensinya.
 type API struct {
 	ProductSvc services.ProductService
 	CartSvc    services.CartService
 	log        *logrus.Logger
 }
 
-// NewHandler membuat instance baru dari API.
 func NewHandler(
 	productSvc services.ProductService,
 	cartSvc services.CartService,
@@ -29,7 +27,7 @@ func NewHandler(
 	}
 }
 
-// ---- HELPER -----
+// ---- HELPERS -----
 
 func getUserIDFromContext(c echo.Context) (uuid.UUID, error) {
 	if val := c.Get("userID"); val != nil {

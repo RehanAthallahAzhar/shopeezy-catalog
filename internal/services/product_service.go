@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"reflect"
 	"strings"
 	"time"
@@ -13,7 +12,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/sirupsen/logrus"
 
-	// internal
 	"github.com/RehanAthallahAzhar/shopeezy-catalog/internal/db"
 	"github.com/RehanAthallahAzhar/shopeezy-catalog/internal/entities"
 	"github.com/RehanAthallahAzhar/shopeezy-catalog/internal/helpers"
@@ -31,7 +29,8 @@ type ProductSource interface {
 		db.GetProductsBySellerIDRow |
 		db.GetProductsByNameRow |
 		db.GetProductByIDRow |
-		db.GetProductByIDsRow
+		db.GetProductByIDsRow |
+		db.GetProductsByTypeRow
 }
 
 type ProductService interface {
@@ -39,6 +38,7 @@ type ProductService interface {
 	GetAllProducts(ctx context.Context) ([]entities.Product, error)
 	GetProductsBySellerID(ctx context.Context, sellerID uuid.UUID) ([]entities.Product, error)
 	GetProductsByName(ctx context.Context, name string) ([]entities.Product, error)
+	GetProductsByType(ctx context.Context, productType string) ([]entities.Product, error)
 	GetProductByID(ctx context.Context, id uuid.UUID) (*entities.Product, error)
 	GetProductByIDs(ctx context.Context, ids []uuid.UUID) ([]entities.Product, error)
 	UpdateProduct(ctx context.Context, req *models.ProductRequest, productID, sellerID uuid.UUID, role string) (*entities.Product, error)
@@ -55,7 +55,6 @@ type productServiceImpl struct {
 	log         *logrus.Logger
 }
 
-// Dependency Injection
 func NewProductService(
 	productRepo repositories.ProductRepository,
 	redisClient *redis.RedisClient,
@@ -79,8 +78,7 @@ func (s *productServiceImpl) CreateProduct(ctx context.Context, userID uuid.UUID
 			errorMessages = append(errorMessages, fmt.Sprintf("Field '%s' failed on the '%s' tag", fieldErr.Field(), fieldErr.Tag()))
 		}
 
-		log.Printf("Product validation failed: %v", errorMessages)
-		return nil, fmt.Errorf("%w: %s", apperrors.ErrInvalidRequestPayload, strings.Join(errorMessages, ", ")) // Menggunakan error kustom
+		return nil, fmt.Errorf("%w: %s", apperrors.ErrInvalidRequestPayload, strings.Join(errorMessages, ", "))
 	}
 
 	product := &db.InsertProductParams{
@@ -195,7 +193,46 @@ func (s *productServiceImpl) GetProductsByName(ctx context.Context, name string)
 		defer cancel()
 
 		if err := s.redisClient.Client.Set(cacheCtx, cacheKey, jsonBytes, 5*time.Minute).Err(); err != nil {
-			// Cukup log errornya, jangan kembalikan ke pengguna.
+			s.log.Warnf("Failed to set cache in background for key '%s': %v", cacheKey, err)
+		}
+	}()
+
+	return domainProducts, nil
+}
+
+func (s *productServiceImpl) GetProductsByType(ctx context.Context, productType string) ([]entities.Product, error) {
+	var products []entities.Product
+	cacheKey := fmt.Sprintf("products_by_type:%s", productType)
+
+	if val, err := s.redisClient.Client.Get(ctx, cacheKey).Result(); err == nil {
+		if err := json.Unmarshal([]byte(val), &products); err == nil {
+			s.log.WithField("name", productType).Info("Hit Cache untuk GetProductsByName")
+			return products, nil
+		}
+	}
+
+	dbProducts, err := s.productRepo.GetProductsByType(ctx, productType)
+	if err != nil {
+		return nil, fmt.Errorf("service: failed to retrieve products by name %s: %w", productType, err)
+	}
+
+	if len(dbProducts) == 0 {
+		return []entities.Product{}, nil
+	}
+
+	domainProducts := toDomainProducts(dbProducts)
+
+	go func() {
+		jsonBytes, err := json.Marshal(domainProducts)
+		if err != nil {
+			s.log.Errorf("Failed to marshal products for caching: %v", err)
+			return
+		}
+
+		cacheCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+
+		if err := s.redisClient.Client.Set(cacheCtx, cacheKey, jsonBytes, 5*time.Minute).Err(); err != nil {
 			s.log.Warnf("Failed to set cache in background for key '%s': %v", cacheKey, err)
 		}
 	}()
@@ -288,7 +325,7 @@ func (s *productServiceImpl) GetProductByIDs(ctx context.Context, ids []uuid.UUI
 		finalProducts = append(finalProducts, domainProducts...)
 
 		if len(domainProducts) > 0 {
-			pairs := make([]interface{}, 0, len(domainProducts)*2) // x2 cause key & value
+			pairs := make([]interface{}, 0, len(domainProducts)*2)
 			for _, product := range domainProducts {
 				cacheKey := fmt.Sprintf("product:%s", product.ID.String())
 				jsonBytes, err := json.Marshal(product)
@@ -301,9 +338,8 @@ func (s *productServiceImpl) GetProductByIDs(ctx context.Context, ids []uuid.UUI
 				if err := s.redisClient.Client.MSet(ctx, pairs...).Err(); err != nil {
 					s.log.WithError(err).Error("Failed to run MSET to save new products to the Redis cache")
 				} else {
-					// Pipelines are useful for sending multiple commands to Redis in a single network trip.
 					pipe := s.redisClient.Client.Pipeline()
-					ttl := 10 * time.Minute // set expire in 10 minutes, cause mset cannot do this
+					ttl := 10 * time.Minute
 					for i := 0; i < len(pairs); i += 2 {
 						key := pairs[i].(string)
 						pipe.Expire(ctx, key, ttl)
@@ -501,7 +537,6 @@ func (s *productServiceImpl) ResetAllProductCaches(ctx context.Context) error {
 	var cursor uint64
 	pattern := "product:*"
 
-	// 'pipeline' makes delete operations much faster
 	pipe := s.redisClient.Client.Pipeline()
 	keysFound := 0
 

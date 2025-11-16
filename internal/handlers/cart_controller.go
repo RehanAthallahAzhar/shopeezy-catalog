@@ -112,7 +112,7 @@ func (a *API) RemoveFromCart() echo.HandlerFunc {
 	}
 }
 
-// ------- HELPER -------
+// ------- HELPERS -------
 
 func toCartResponse(cart *entities.Cart) *models.CartResponse {
 	return &models.CartResponse{

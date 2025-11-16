@@ -269,7 +269,7 @@ SELECT
   created_at,
   updated_at
 FROM products
-WHERE name LIKE $1 AND deleted_at IS NULL
+WHERE name ILIKE $1 AND deleted_at IS NULL
 `
 
 type GetProductsByNameRow struct {
@@ -357,6 +357,69 @@ func (q *Queries) GetProductsBySellerID(ctx context.Context, sellerID uuid.UUID)
 	var items []GetProductsBySellerIDRow
 	for rows.Next() {
 		var i GetProductsBySellerIDRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.SellerID,
+			&i.Name,
+			&i.Price,
+			&i.Stock,
+			&i.Discount,
+			&i.Type,
+			&i.Description,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getProductsByType = `-- name: GetProductsByType :many
+SELECT 
+  id,
+  seller_id,
+  "name",
+  price,
+  stock,
+  discount,
+  "type",
+  "description",
+  created_at,
+  updated_at
+FROM products
+WHERE "type" = $1 AND deleted_at IS NULL
+`
+
+type GetProductsByTypeRow struct {
+	ID          uuid.UUID
+	SellerID    uuid.UUID
+	Name        string
+	Price       int32
+	Stock       int32
+	Discount    sql.NullInt32
+	Type        sql.NullString
+	Description sql.NullString
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+}
+
+func (q *Queries) GetProductsByType(ctx context.Context, type_ sql.NullString) ([]GetProductsByTypeRow, error) {
+	rows, err := q.db.QueryContext(ctx, getProductsByType, type_)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetProductsByTypeRow
+	for rows.Next() {
+		var i GetProductsByTypeRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.SellerID,

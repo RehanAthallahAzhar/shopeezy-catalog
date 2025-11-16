@@ -8,5 +8,5 @@ import (
 
 type EventPublisher interface {
 	PublishOrderCreated(ctx context.Context, event models.OrderCreatedEvent) error
-	// Mungkin ada fungsi lain di sini nanti, seperti PublishOrderCanceled
+	// PublishOrderCanceled (coming soon)
 }

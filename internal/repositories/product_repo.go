@@ -20,6 +20,7 @@ type ProductRepository interface {
 	GetProductByIDs(ctx context.Context, ids []uuid.UUID) ([]db.GetProductByIDsRow, error)
 	GetProductsBySellerID(ctx context.Context, sellerID uuid.UUID) ([]db.GetProductsBySellerIDRow, error)
 	GetProductsByName(ctx context.Context, name string) ([]db.GetProductsByNameRow, error)
+	GetProductsByType(ctx context.Context, productType string) ([]db.GetProductsByTypeRow, error)
 	UpdateProduct(ctx context.Context, updateParams *db.UpdateProductParams) (*db.Product, error)
 	DeleteProduct(ctx context.Context, id uuid.UUID) (*db.Product, error)
 	DecreaseProductStock(ctx context.Context, tx *sql.Tx, productID uuid.UUID, quantity int32) (*db.Product, error)
@@ -121,6 +122,26 @@ func (r *productRepository) GetProductsByName(ctx context.Context, name string) 
 	}
 
 	r.log.WithFields(logrus.Fields{"name": name, "error": err}).Error("Product not found")
+	return rows, nil
+}
+
+func (r *productRepository) GetProductsByType(ctx context.Context, productType string) ([]db.GetProductsByTypeRow, error) {
+	var rows []db.GetProductsByTypeRow
+
+	rows, err := r.q.GetProductsByType(ctx, sql.NullString{
+		String: productType,
+		Valid:  true,
+	})
+
+	if err != nil {
+		r.log.WithFields(logrus.Fields{
+			"name_query": productType,
+			"error":      err,
+		}).Error("Failed to execute the GetProductsByName query in the database")
+		return nil, err
+	}
+
+	r.log.WithFields(logrus.Fields{"name": productType, "error": err}).Error("Product not found")
 	return rows, nil
 }
 

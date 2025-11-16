@@ -41,7 +41,6 @@ func AuthMiddleware(authClient *account.AuthClient, log *logrus.Logger) echo.Mid
 			}
 
 			token := authHeader
-			log.Println("Extracted token:", token)
 			if len(authHeader) > 7 && strings.HasPrefix(authHeader, "Bearer ") {
 				token = authHeader[7:]
 			} else {
@@ -50,7 +49,6 @@ func AuthMiddleware(authClient *account.AuthClient, log *logrus.Logger) echo.Mid
 
 			isValid, userID, username, role, errMsg, err := authClient.ValidateToken(token)
 			if err != nil {
-				log.Printf("Error during gRPC token validation: %v", err)
 				return c.JSON(http.StatusInternalServerError, echo.Map{"message": "Server error during token validation"})
 			}
 
@@ -61,7 +59,6 @@ func AuthMiddleware(authClient *account.AuthClient, log *logrus.Logger) echo.Mid
 			c.Set("userID", userID)
 			c.Set("username", username)
 			c.Set("role", role)
-			log.Printf("User %s (ID: %s, Role: %s) successfully authenticated.", username, userID, role)
 
 			return next(c)
 		}

@@ -87,7 +87,22 @@ SELECT
   created_at,
   updated_at
 FROM products
-WHERE name LIKE $1 AND deleted_at IS NULL;
+WHERE name ILIKE $1 AND deleted_at IS NULL;
+
+-- name: GetProductsByType :many
+SELECT 
+  id,
+  seller_id,
+  "name",
+  price,
+  stock,
+  discount,
+  "type",
+  "description",
+  created_at,
+  updated_at
+FROM products
+WHERE "type" = $1 AND deleted_at IS NULL;
 
 -- name: UpdateProduct :one
 UPDATE products

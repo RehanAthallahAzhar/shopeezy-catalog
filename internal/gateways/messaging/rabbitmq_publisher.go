@@ -18,14 +18,11 @@ type RabbitMQPublisher struct {
 	channel *amqp.Channel
 }
 
-// publisher constructor
 func NewRabbitMQPublisher(ch *amqp.Channel) (*RabbitMQPublisher, error) {
-	// Pastikan "Papan Pengumuman" (Exchange) ada.
-	// Jika belum ada, perintah ini akan membuatnya.
 	err := ch.ExchangeDeclare(
 		OrderExchange, // name
-		"fanout",      // type: fanout akan mengirim pesan ke semua queue yang terikat
-		true,          // durable: exchange akan tetap ada jika RabbitMQ restart
+		"fanout",      // type
+		true,          // durable
 		false,         // auto-deleted
 		false,         // internal
 		false,         // no-wait
@@ -48,8 +45,8 @@ func (p *RabbitMQPublisher) PublishOrderCreated(ctx context.Context, event model
 
 	// Publikasikan pesan
 	err = p.channel.Publish(
-		OrderExchange, // exchange: Kirim ke "papan pengumuman" kita
-		"",            // routing key: tidak perlu untuk fanout
+		OrderExchange, // exchange
+		"",            // routing key
 		false,         // mandatory
 		false,         // immediate
 		amqp.Publishing{

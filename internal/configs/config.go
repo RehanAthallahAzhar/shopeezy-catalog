@@ -17,10 +17,9 @@ type AppConfig struct {
 	}
 }
 
-// LoadConfig sekarang akan mengisi struct AppConfig yang sudah terstruktur.
 func LoadConfig(log *logrus.Logger) (*AppConfig, error) {
 	if err := godotenv.Load(); err != nil {
-		log.Warn("Peringatan: Gagal memuat file .env.")
+		log.Fatalf("Warn: failed to open .env file: %v", err)
 	}
 
 	cfg := &AppConfig{}

@@ -4,11 +4,13 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"net/http"
 	"time"
 
 	"github.com/go-playground/validator/v10"
 	"github.com/golang-migrate/migrate/v4"
 	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v4/middleware"
 	"github.com/sirupsen/logrus"
 	"github.com/streadway/amqp"
 	"google.golang.org/grpc"
@@ -22,7 +24,7 @@ import (
 	"github.com/RehanAthallahAzhar/shopeezy-catalog/db"
 	"github.com/RehanAthallahAzhar/shopeezy-catalog/internal/configs"
 	dbGenerated "github.com/RehanAthallahAzhar/shopeezy-catalog/internal/db"
-	"github.com/RehanAthallahAzhar/shopeezy-catalog/internal/delivery/http/middlewares"
+	customMiddleware "github.com/RehanAthallahAzhar/shopeezy-catalog/internal/delivery/http/middlewares"
 	"github.com/RehanAthallahAzhar/shopeezy-catalog/internal/delivery/http/routes"
 	grpcServerImpl "github.com/RehanAthallahAzhar/shopeezy-catalog/internal/grpc"
 	"github.com/RehanAthallahAzhar/shopeezy-catalog/internal/handlers"
@@ -46,8 +48,6 @@ func main() {
 		log.Fatalf("FATAL: Gagal memuat konfigurasi: %v", err)
 	}
 
-	log.Println(cfg.Database)
-
 	dbCredential := models.Credential{
 		Host:         cfg.Database.Host,
 		Username:     cfg.Database.User,
@@ -67,16 +67,12 @@ func main() {
 		dbCredential.DatabaseName,
 	)
 
-	log.Println(connectionString)
-
 	conn, err := db.Connect(ctx, &dbCredential)
 	if err != nil {
 		log.Fatalf("DB connection error: %v", err)
 	}
 
 	// Migrations
-	log.Println("Running database migrations...")
-
 	m, err := migrate.New(
 		cfg.Migration.Path,
 		connectionString,
@@ -89,14 +85,13 @@ func main() {
 		log.Fatalf("Failed to run migrations: %v", err)
 	}
 
-	log.Println("Database migrations ran successfully.")
 	defer conn.Close()
 
 	// Init SQLC query
 	sqlcQueries := dbGenerated.New(conn)
 
 	// Redis
-	redisClient, err := redis.NewRedisClient()
+	redisClient, err := redis.NewRedisClient(&cfg.Redis, log)
 	if err != nil {
 		log.Fatalf("Failed to connect to Redis: %v", err)
 	}
@@ -124,7 +119,7 @@ func main() {
 	}
 	defer rabbitChannel.Close()
 
-	// // Buat instance publisher
+	// // order publisher
 	// orderPublisher, err := messaging.NewRabbitMQPublisher(rabbitChannel)
 	// if err != nil {
 	// 	log.Fatalf("Gagal membuat order event publisher: %v", err)
@@ -141,7 +136,7 @@ func main() {
 	handler := handlers.NewHandler(productService, cartService, log)
 
 	// middleware
-	authMiddleware := middlewares.AuthMiddleware(authClientWrapper, log)
+	authMiddleware := customMiddleware.AuthMiddleware(authClientWrapper, log)
 
 	lis, err := net.Listen("tcp", ":"+cfg.Server.GRPCPort)
 	if err != nil {
@@ -153,8 +148,6 @@ func main() {
 	productpb.RegisterProductServiceServer(s, productServer)
 	reflection.Register(s)
 
-	// 5. JALANKAN SERVER GRPC DI GOROUTINE (DI LATAR BELAKANG)
-	log.Printf("gRPC server for Catalog service is listening on port %s", lis.Addr())
 	go func() {
 		if err := s.Serve(lis); err != nil {
 			log.Fatalf("Failed to serve gRPC server: %v", err)
@@ -163,10 +156,19 @@ func main() {
 
 	// Setup Echo (REST API)
 	e := echo.New()
+	e.Use(middleware.RequestID())
+	e.Use(customMiddleware.LoggingMiddleware(log))
+	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
+		AllowOrigins: []string{
+			"http://localhost",
+			"http://localhost:5173",
+		},
+		AllowMethods: []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodOptions},
+		AllowHeaders: []string{echo.HeaderOrigin, echo.HeaderContentType, echo.HeaderAccept, echo.HeaderAuthorization},
+	}))
+
 	routes.InitRoutes(e, handler, authMiddleware)
 
-	// JALANKAN SERVER ECHO (DI MAIN GOROUTINE)
-	log.Printf("Server REST API Echo is listening on port %s", cfg.Server.Port)
 	e.Logger.Fatal(e.Start(":" + cfg.Server.Port))
 }
 
@@ -175,6 +177,6 @@ func createGrpcConnection(url string, log *logrus.Logger) *grpc.ClientConn {
 	if err != nil {
 		log.Fatalf("Failed to connect to the gRPC service at %s: %v", url, err)
 	}
-	log.Printf("Connect to the gRPC Service at %s", url)
+
 	return conn
 }

@@ -14,7 +14,6 @@ import (
 func (api *API) CreateProduct() echo.HandlerFunc {
 	return func(c echo.Context) error {
 		ctx := c.Request().Context()
-		api.log.Infof("Received request to create product from IP: %s", c.RealIP())
 
 		userID, err := getUserIDFromContext(c)
 		if err != nil {
@@ -38,7 +37,6 @@ func (api *API) CreateProduct() echo.HandlerFunc {
 func (api *API) GetAllProducts() echo.HandlerFunc {
 	return func(c echo.Context) error {
 		ctx := c.Request().Context()
-		c.Logger().Infof("Received request for product list from IP: %s", c.RealIP())
 
 		res, err := api.ProductSvc.GetAllProducts(ctx)
 		if err != nil {
@@ -52,14 +50,31 @@ func (api *API) GetAllProducts() echo.HandlerFunc {
 func (api *API) GetProductsByName() echo.HandlerFunc {
 	return func(c echo.Context) error {
 		ctx := c.Request().Context()
-		c.Logger().Infof("Received request for GetProductsByName from IP: %s", c.RealIP())
 
-		ProductName, err := getFromPathParam(c, "tag")
+		productName, err := getFromPathParam(c, "name")
 		if err != nil {
 			return respondError(c, http.StatusBadRequest, err)
 		}
 
-		res, err := api.ProductSvc.GetProductsByName(ctx, ProductName)
+		res, err := api.ProductSvc.GetProductsByName(ctx, productName)
+		if err != nil {
+			return handleGetError(c, err)
+		}
+
+		return respondSuccess(c, http.StatusOK, MsgProductRetrieved, toProductResponseList(res))
+	}
+}
+
+func (api *API) GetProductsByType() echo.HandlerFunc {
+	return func(c echo.Context) error {
+		ctx := c.Request().Context()
+
+		productType, err := getFromPathParam(c, "type")
+		if err != nil {
+			return respondError(c, http.StatusBadRequest, err)
+		}
+
+		res, err := api.ProductSvc.GetProductsByType(ctx, productType)
 		if err != nil {
 			return handleGetError(c, err)
 		}
@@ -71,7 +86,6 @@ func (api *API) GetProductsByName() echo.HandlerFunc {
 func (api *API) GetProductByID() echo.HandlerFunc {
 	return func(c echo.Context) error {
 		ctx := c.Request().Context()
-		c.Logger().Infof("Received request for GetProductByID from IP: %s", c.RealIP())
 
 		productID, err := getIDFromPathParam(c, "id")
 		if err != nil {
@@ -90,7 +104,6 @@ func (api *API) GetProductByID() echo.HandlerFunc {
 func (api *API) GetProductsBySellerID() echo.HandlerFunc {
 	return func(c echo.Context) error {
 		ctx := c.Request().Context()
-		c.Logger().Infof("Received request for GetProductsBySellerID from IP: %s", c.RealIP())
 
 		sellerID, err := getIDFromPathParam(c, "seller_id")
 		if err != nil {
@@ -109,7 +122,6 @@ func (api *API) GetProductsBySellerID() echo.HandlerFunc {
 func (api *API) UpdateProduct() echo.HandlerFunc {
 	return func(c echo.Context) error {
 		ctx := c.Request().Context()
-		c.Logger().Infof("Received request for UpdateProduct from IP: %s", c.RealIP())
 
 		userID, err := getUserIDFromContext(c)
 		if err != nil {
@@ -144,7 +156,6 @@ func (api *API) UpdateProduct() echo.HandlerFunc {
 func (api *API) DeleteProduct() echo.HandlerFunc {
 	return func(c echo.Context) error {
 		ctx := c.Request().Context()
-		c.Logger().Infof("Received request for DeleteProduct from IP: %s", c.RealIP())
 
 		sellerID, err := getUserIDFromContext(c)
 		if err != nil {
@@ -173,7 +184,6 @@ func (api *API) DeleteProduct() echo.HandlerFunc {
 func (api *API) ClearProductCaches() echo.HandlerFunc {
 	return func(c echo.Context) error {
 		ctx := c.Request().Context()
-		c.Logger().Infof("Received request for ClearProductCaches from IP: %s", c.RealIP())
 
 		err := api.ProductSvc.ResetAllProductCaches(ctx)
 		if err != nil {
@@ -184,7 +194,7 @@ func (api *API) ClearProductCaches() echo.HandlerFunc {
 	}
 }
 
-// ------- HELPER -------
+// ------- HELPERS -------
 func toProductResponse(product *entities.Product) *models.ProductResponse {
 	return &models.ProductResponse{
 		ID:          product.ID,
