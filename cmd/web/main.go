@@ -84,7 +84,6 @@ func main() {
 	if err := m.Up(); err != nil && err != migrate.ErrNoChange {
 		log.Fatalf("Failed to run migrations: %v", err)
 	}
-
 	defer conn.Close()
 
 	// Init SQLC query
@@ -97,7 +96,6 @@ func main() {
 	}
 	defer redisClient.Close()
 
-	// gRPC Account & Auth
 	accountConn := createGrpcConnection(cfg.GRPC.AccountServiceAddress, log)
 	defer accountConn.Close()
 
@@ -119,23 +117,12 @@ func main() {
 	}
 	defer rabbitChannel.Close()
 
-	// // order publisher
-	// orderPublisher, err := messaging.NewRabbitMQPublisher(rabbitChannel)
-	// if err != nil {
-	// 	log.Fatalf("Gagal membuat order event publisher: %v", err)
-	// }
-
-	// Depedency Ijection
 	productsRepo := repositories.NewProductRepository(conn, sqlcQueries, log)
 	cartsRepo := repositories.NewCartRepository(redisClient, log)
-
 	validate := validator.New()
 	productService := services.NewProductService(productsRepo, redisClient, validate, log)
 	cartService := services.NewCartService(cartsRepo, productService, redisClient, accountClient, log)
-
 	handler := handlers.NewHandler(productService, cartService, log)
-
-	// middleware
 	authMiddleware := customMiddleware.AuthMiddleware(authClientWrapper, log)
 
 	lis, err := net.Listen("tcp", ":"+cfg.Server.GRPCPort)
@@ -175,7 +162,7 @@ func main() {
 func createGrpcConnection(url string, log *logrus.Logger) *grpc.ClientConn {
 	conn, err := grpc.NewClient(url, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
-		log.Fatalf("Failed to connect to the gRPC service at %s: %v", url, err)
+		log.Fatalf("Failed to create gRPC client connection to %s: %v", url, err)
 	}
 
 	return conn
